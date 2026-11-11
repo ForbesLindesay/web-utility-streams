@@ -1,0 +1,108 @@
+{
+  "name": "web-utility-streams",
+  "version": "0.1.0",
+  "description": "Various utility streams that are very useful for working with web streams.",
+  "type": "module",
+  "exports": {
+    "./ConcatStream": {
+      "types": "./lib/ConcatStream.d.mts",
+      "default": "./lib/ConcatStream.mjs"
+    },
+    "./consumers": {
+      "types": "./lib/consumers.d.mts",
+      "default": "./lib/consumers.mjs"
+    },
+    "./DebugStream": {
+      "types": "./lib/DebugStream.d.mts",
+      "default": "./lib/DebugStream.mjs"
+    },
+    "./DeferredStream": {
+      "types": "./lib/DeferredStream.d.mts",
+      "default": "./lib/DeferredStream.mjs"
+    },
+    "./EmptyStream": {
+      "types": "./lib/EmptyStream.d.mts",
+      "default": "./lib/EmptyStream.mjs"
+    },
+    "./EventSourceDecoderStream": {
+      "types": "./lib/EventSourceDecoderStream.d.mts",
+      "default": "./lib/EventSourceDecoderStream.mjs"
+    },
+    "./EventSourceEncoderStream": {
+      "types": "./lib/EventSourceEncoderStream.d.mts",
+      "default": "./lib/EventSourceEncoderStream.mjs"
+    },
+    "./FilterMapStream": {
+      "types": "./lib/FilterMapStream.d.mts",
+      "default": "./lib/FilterMapStream.mjs"
+    },
+    "./FilterStream": {
+      "types": "./lib/FilterStream.d.mts",
+      "default": "./lib/FilterStream.mjs"
+    },
+    "./JsonDecoderStream": {
+      "types": "./lib/JsonDecoderStream.d.mts",
+      "default": "./lib/JsonDecoderStream.mjs"
+    },
+    "./JsonEncoderStream": {
+      "types": "./lib/JsonEncoderStream.d.mts",
+      "default": "./lib/JsonEncoderStream.mjs"
+    },
+    "./JsonTokenDecoderStream": {
+      "types": "./lib/JsonTokenDecoderStream.d.mts",
+      "default": "./lib/JsonTokenDecoderStream.mjs"
+    },
+    "./MapStream": {
+      "types": "./lib/MapStream.d.mts",
+      "default": "./lib/MapStream.mjs"
+    },
+    "./NewlineDelimitedJsonDecoderStream": {
+      "types": "./lib/NewlineDelimitedJsonDecoderStream.d.mts",
+      "default": "./lib/NewlineDelimitedJsonDecoderStream.mjs"
+    },
+    "./NewlineDelimitedJsonEncoderStream": {
+      "types": "./lib/NewlineDelimitedJsonEncoderStream.d.mts",
+      "default": "./lib/NewlineDelimitedJsonEncoderStream.mjs"
+    },
+    "./readableStreamToGenerator": {
+      "types": "./lib/readableStreamToGenerator.d.mts",
+      "default": "./lib/readableStreamToGenerator.mjs"
+    },
+    "./SplitLinesStream": {
+      "types": "./lib/SplitLinesStream.d.mts",
+      "default": "./lib/SplitLinesStream.mjs"
+    },
+    "./TransformPipelineStream": {
+      "types": "./lib/TransformPipelineStream.d.mts",
+      "default": "./lib/TransformPipelineStream.mjs"
+    },
+    "./UnionStream": {
+      "types": "./lib/UnionStream.d.mts",
+      "default": "./lib/UnionStream.mjs"
+    }
+  },
+  "files": [
+    "lib/"
+  ],
+  "allowScripts": {
+    "fsevents@2.3.3": true
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ForbesLindesay/request-response-stream.git"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "rootDir": "src",
+
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "es2025",
+    "resolveJsonModule": true,
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    "isolatedDeclarations": true,
+    "declaration": true,
+    "lib": ["ES2025", "DOM", "ESNext.Disposable"],
+
+    "module": "NodeNext",
+    "noEmit": true
+  },
+  "exclude": ["./lib/**/*", "./vitest.config.ts", "./tsdown.config.ts"]
+}
