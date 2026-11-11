@@ -5,7 +5,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 async function decode(text: string | string[]) {
   return await readableStreamResults(
@@ -84,6 +84,58 @@ test("EventSourceDecoderStream - only strips a single leading space from values"
       },
     },
   ]);
+});
+
+test("EventSourceDecoderStream - only matches exact field names, however the input is split", async () => {
+  const text = [
+    "dataX: ignored",
+    "dat: ignored",
+    "Data: ignored",
+    " data: ignored",
+    "data",
+    "data:",
+    "data:no space",
+    "data:  two spaces",
+    "data: a:b",
+    "eventX: ignored",
+    "event:custom",
+    "idX: ignored",
+    "id",
+    "retryX: 1",
+    "retry:42",
+    ":data: comment",
+    "",
+    "",
+  ].join("\n");
+  const expected = {
+    ok: true,
+    value: {
+      type: "custom",
+      data: "\n\nno space\n two spaces\na:b",
+      id: "",
+      retryMilliseconds: 42,
+    },
+  };
+  for (const size of [1, 2, 3, 5, text.length]) {
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += size) {
+      chunks.push(text.slice(i, i + size));
+    }
+    // Enqueue all the chunks at once, rather than using `decode`, which waits
+    // between chunks
+    const input = new ReadableStream<string>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    expect(
+      await readableStreamResults(
+        input.pipeThrough(new EventSourceDecoderStream()),
+      ),
+      `size ${size}`,
+    ).toEqual([expected]);
+  }
 });
 
 test("EventSourceDecoderStream - dispatches events with empty data", async () => {

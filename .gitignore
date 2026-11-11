@@ -137,3 +137,6 @@ dist
 
 lib/
 package-lock.json
+
+# Generated benchmark data
+benchmarks/.data/

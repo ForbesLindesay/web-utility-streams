@@ -1,4 +1,4 @@
-import { createJsonTokenizer, type JsonToken } from "./JsonTokenizer.js";
+import JsonTokenizer, { type JsonToken } from "./internal/JsonTokenizer.js";
 
 export type { JsonToken };
 
@@ -21,13 +21,18 @@ export default class JsonTokenDecoderStream extends TransformStream<
   JsonToken
 > {
   constructor() {
-    const tokenizer = createJsonTokenizer("JsonTokenDecoderStream");
+    let tokenizer!: JsonTokenizer;
     super({
-      transform(chunk, controller) {
-        tokenizer.write(chunk, (token) => controller.enqueue(token));
+      start(controller) {
+        tokenizer = new JsonTokenizer("JsonTokenDecoderStream", (token) =>
+          controller.enqueue(token),
+        );
       },
-      flush(controller) {
-        tokenizer.end((token) => controller.enqueue(token));
+      transform(chunk) {
+        tokenizer.write(chunk);
+      },
+      flush() {
+        tokenizer.end();
       },
     });
   }

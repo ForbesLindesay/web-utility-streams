@@ -5,7 +5,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 async function decode(
   chunks: string[],
@@ -322,6 +322,100 @@ test("JsonDecoderStream - error messages include the position", async () => {
   });
 });
 
+/**
+ * Decode `chunks`, enqueuing them all at once, rather than using
+ * `readableStream`, which waits between chunks.
+ */
+async function decodeChunks(
+  chunks: string[],
+  options?: ConstructorParameters<typeof JsonDecoderStream>[0],
+) {
+  const input = new ReadableStream<string>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+  return await readableStreamResults(
+    input.pipeThrough(new JsonDecoderStream(options)),
+  );
+}
+
+const splitEvery = (text: string, size: number) =>
+  Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+    text.slice(i * size, (i + 1) * size),
+  );
+
+test("JsonDecoderStream - handles strings with brackets, quotes and backslashes in elements, split at every point", async () => {
+  const results = [
+    { a: "}]", b: "{[", c: 'quote " here', d: "ends with \\", e: '\\"' },
+    ["\\", "]", "\\\\", '"]}', { "}": "{" }],
+    { nested: [{ deep: ["x\\"] }] },
+  ];
+  const text = JSON.stringify({ skipped: results, results });
+  for (const size of [1, 2, 3, 4, 7]) {
+    expect(
+      await decodeChunks(splitEvery(text, size), { path: ["results"] }),
+    ).toEqual(results.map(ok));
+  }
+});
+
+test("JsonDecoderStream - errors inside elements report the position of the problem", async () => {
+  const cases = [
+    // Inside an element
+    [`[1, {"a": [1, 2 x]}]`, "token x at position 16"],
+    [`[{"a": "\\x"}]`, "string at position 7"],
+    // Inside a nested element
+    [`[[{"a": 1}, {"b": 2,}]]`, "token } at position 20"],
+  ];
+  for (const [text, message] of cases) {
+    for (const size of [1, 5, text!.length]) {
+      expect(await decodeChunks(splitEvery(text!, size)), text).toEqual([
+        ...(text!.startsWith("[1,") ? [ok(1)] : []),
+        { ok: false },
+      ]);
+      expect(await decodeError(splitEvery(text!, size)), text).toMatchObject({
+        message: `JsonDecoderStream: Unexpected ${message}`,
+      });
+    }
+  }
+  // Inside a value that is being skipped
+  expect(
+    await decodeError([`{"other": {"a": [1, 2,]}, "results": [1]}`], {
+      path: ["results"],
+    }),
+  ).toMatchObject({
+    message: "JsonDecoderStream: Unexpected token ] at position 22",
+  });
+});
+
+test("JsonDecoderStream - errors if the input ends part way through an element", async () => {
+  for (const document of [`[{"a": [1, 2`, `[{"a": "b`, `[{"a": "b\\`, `[[[`]) {
+    expect(await decodeError([document]), document).toMatchObject({
+      message: "JsonDecoderStream: Unexpected end of JSON input",
+    });
+  }
+});
+
+test("JsonDecoderStream - handles elements larger than 1MB", async () => {
+  const large = {
+    text: "x".repeat(600_000),
+    items: Array.from({ length: 30_000 }, (_, i) => ({ i, s: `"${i}"\\` })),
+  };
+  const text = JSON.stringify({ skipped: large, results: [1, large, 2] });
+  expect(
+    await decodeChunks(splitEvery(text, 16384), { path: ["results"] }),
+  ).toEqual([ok(1), ok(large), ok(2)]);
+
+  // Errors are still found, with the right position
+  const invalid = text.replace('{"i":29000,', '{"i":29000 x,');
+  expect(
+    await decodeError(splitEvery(invalid, 16384), { path: ["results"] }),
+  ).toMatchObject({
+    message: `JsonDecoderStream: Unexpected token x at position ${invalid.indexOf(" x,") + 1}`,
+  });
+});
+
 test("JsonDecoderStream - only emits elements that are valid", async () => {
   expect(await decode([`[1, {"a": [2, }]`])).toEqual([ok(1), { ok: false }]);
 });
@@ -516,4 +610,90 @@ testTransformRobustness({
     `"g": 6}`,
   ],
   invalidInput: `]`,
+});
+
+test("JsonDecoderStream - matches JSON.parse for random documents, split into random chunks", async () => {
+  let seed = 1;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const pick = <T>(items: T[]) => items[Math.floor(random() * items.length)]!;
+  const randomValue = (depth: number): unknown => {
+    const r = random();
+    if (depth > 3 || r < 0.4) {
+      return pick<unknown>([
+        0,
+        -1.5e3,
+        true,
+        null,
+        "",
+        'quote " and \\ backslash \\\\',
+        "\\",
+        "brackets {[]} and , : inside",
+        "unicode é 東京 👋",
+        "\n\t\u0001",
+      ]);
+    }
+    if (r < 0.7) {
+      return Array.from({ length: Math.floor(random() * 4) }, () =>
+        randomValue(depth + 1),
+      );
+    }
+    return Object.fromEntries(
+      Array.from({ length: Math.floor(random() * 4) }, (_, i) => [
+        pick(["a", "results", "__proto__", 'k"\\', "{"]) + i,
+        randomValue(depth + 1),
+      ]),
+    );
+  };
+  const randomChunks = (text: string) => {
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length;) {
+      const size = pick([1, 2, 7, 50, 1000]);
+      chunks.push(text.slice(i, i + size));
+      i += size;
+    }
+    return chunks;
+  };
+
+  for (let n = 0; n < 1000; n++) {
+    const document = {
+      skipped: randomValue(1),
+      results: Array.from({ length: 1 + Math.floor(random() * 4) }, () =>
+        randomValue(1),
+      ),
+    };
+    let text = JSON.stringify(document, null, random() < 0.5 ? 2 : undefined);
+    const isValid = random() < 0.5;
+    if (!isValid) {
+      // Delete or insert a character, which usually makes it invalid
+      const i = Math.floor(random() * text.length);
+      text =
+        random() < 0.5
+          ? text.slice(0, i) + text.slice(i + 1)
+          : text.slice(0, i) +
+            pick([",", "]", "}", '"', "\\", "x"]) +
+            text.slice(i);
+    }
+    const results = await decodeChunks(randomChunks(text), {
+      path: ["results"],
+    });
+    if (isValid) {
+      expect(results, text).toEqual(document.results.map(ok));
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        expect(results.at(-1), text).toEqual({ ok: false });
+        continue;
+      }
+      if (Array.isArray((parsed as { results?: unknown }).results)) {
+        expect(results, text).toEqual(
+          (parsed as { results: unknown[] }).results.map(ok),
+        );
+      }
+    }
+  }
 });

@@ -9,7 +9,7 @@ import {
   readableStreamResults,
   runPipeline,
   trackedSource,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 import UnionStream from "./UnionStream.js";
 
 test("UnionStream - merges two streams in the order the chunks are available", async () => {

@@ -5,7 +5,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("NewlineDelimitedJsonDecoderStream - handles newlines in the middle of chunks and doesn't need a trailing newline", async () => {
   expect(

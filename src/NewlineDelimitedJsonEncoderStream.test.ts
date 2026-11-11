@@ -5,7 +5,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("NewlineDelimitedJsonEncoderStream - encodes each value as a line of JSON", async () => {
   expect(

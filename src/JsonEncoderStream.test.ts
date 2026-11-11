@@ -7,7 +7,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 /**
  * Enqueue all values at once, so tests are fast. The transform is still

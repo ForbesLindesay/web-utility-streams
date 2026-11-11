@@ -7,7 +7,7 @@ import {
   readableStreamResults,
   testTransformRobustness,
   trackedSource,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("DeferredStream - emits the chunks from the resolved stream", async () => {
   expect(

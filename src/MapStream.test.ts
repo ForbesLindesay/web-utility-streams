@@ -5,7 +5,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("MapStream - maps each chunk using an async function, preserving order", async () => {
   expect(

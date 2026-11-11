@@ -60,31 +60,16 @@ export default class JsonEncoderStream extends TransformStream<
     const suffix = (mode === "array" ? "]" : "}") + "}".repeat(path.length);
     let isFirst = true;
 
+    const stringifyElement =
+      mode === "object" ? stringifyObjectKey : stringifyArrayElement;
     super({
       start(controller) {
         controller.enqueue(prefix);
       },
       transform(chunk, controller) {
-        let json: string;
-        if (mode === "object") {
-          if (
-            !Array.isArray(chunk) ||
-            chunk.length !== 2 ||
-            typeof chunk[0] !== "string"
-          ) {
-            throw new TypeError(
-              `JsonEncoderStream: In "object" mode, each chunk must be a [key, value] tuple`,
-            );
-          }
-          const value: string | undefined = JSON.stringify(chunk[1]);
-          // Like JSON.stringify, leave out properties that have no JSON value
-          if (value === undefined) return;
-          json = `${JSON.stringify(chunk[0])}:${value}`;
-        } else {
-          // Like JSON.stringify, use null for elements that have no JSON value
-          json = JSON.stringify(chunk) ?? "null";
-        }
-        controller.enqueue(isFirst ? json : `,${json}`);
+        const json = stringifyElement(chunk);
+        if (json === undefined) return;
+        controller.enqueue(isFirst ? json : "," + json);
         isFirst = false;
       },
       flush(controller) {
@@ -92,6 +77,26 @@ export default class JsonEncoderStream extends TransformStream<
       },
     });
   }
+}
+
+function stringifyArrayElement(chunk: unknown) {
+  // Like JSON.stringify, use null for elements that have no JSON value
+  return JSON.stringify(chunk) ?? "null";
+}
+function stringifyObjectKey(chunk: unknown) {
+  if (
+    !Array.isArray(chunk) ||
+    chunk.length !== 2 ||
+    typeof chunk[0] !== "string"
+  ) {
+    throw new TypeError(
+      `JsonEncoderStream: In "object" mode, each chunk must be a [key, value] tuple`,
+    );
+  }
+  const value: string | undefined = JSON.stringify(chunk[1]);
+  // Like JSON.stringify, leave out properties that have no JSON value
+  if (value === undefined) return;
+  return `${JSON.stringify(chunk[0])}:${value}`;
 }
 
 /**

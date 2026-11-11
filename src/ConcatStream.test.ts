@@ -10,7 +10,7 @@ import {
   runPipeline,
   testTransformRobustness,
   trackedSource,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("ConcatStream - emits all events from each stream in order", async () => {
   expect(

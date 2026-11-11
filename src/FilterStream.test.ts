@@ -4,7 +4,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("FilterStream - only keeps chunks that match the filter", async () => {
   expect(

@@ -1,4 +1,7 @@
-import { DEFAULT_LINE_ENDING, type LineEnding } from "./LineEndings.js";
+import {
+  DEFAULT_LINE_ENDING,
+  type LineEnding,
+} from "./internal/LineEndings.js";
 
 export interface NewlineDelimitedJsonEncoderStreamOptions {
   /**

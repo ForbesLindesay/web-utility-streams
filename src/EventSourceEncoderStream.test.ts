@@ -7,7 +7,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 async function encode(events: EventSourceEncoderInput[]) {
   return await readableStreamResults(

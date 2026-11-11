@@ -1,3 +1,4 @@
+import LineSplitter from "./internal/LineSplitter.js";
 import SplitLinesStream from "./SplitLinesStream.js";
 import TransformPipelineStream from "./TransformPipelineStream.js";
 
@@ -16,43 +17,55 @@ export interface NewlineDelimitedJsonDecoderStreamOptions {
   ) => void;
 }
 
+let lastError: Error | undefined;
+function tryParse(chunk: string) {
+  try {
+    return JSON.parse(chunk);
+  } catch (ex: any) {
+    lastError = ex;
+    return undefined;
+  }
+}
+function handleError(
+  onError: NewlineDelimitedJsonDecoderStreamOptions["onError"],
+  line: string,
+  controller: TransformStreamDefaultController<unknown>,
+) {
+  const err = lastError;
+  lastError = undefined;
+  // Ignore blank (or whitespace only) lines. We only check for
+  // these after JSON.parse fails, as they're rare.
+  if (line.trim()) {
+    if (onError) onError(line, err!, controller);
+    else controller.error(err!);
+  }
+}
 /**
  * Decode a stream of text in the newline delimited JSON format. The text can
  * be split into chunks at any point, any line ending is supported, and blank
  * lines are ignored.
  */
-export default class NewlineDelimitedJsonDecoderStream extends TransformPipelineStream<
+export default class NewlineDelimitedJsonDecoderStream extends TransformStream<
   string,
   unknown
 > {
-  constructor({
-    onError = (_, error, controller) => controller.error(error),
-  }: NewlineDelimitedJsonDecoderStreamOptions = {}) {
-    super((input) =>
-      input.pipeThrough(new SplitLinesStream()).pipeThrough(
-        new TransformStream<string, unknown>({
-          transform(chunk, controller) {
-            // Ignore blank (or whitespace only) lines
-            if (!chunk.trim()) return;
-            const parsed = jsonParse(chunk);
-            if (parsed.ok) {
-              controller.enqueue(parsed.value);
-            } else {
-              onError(chunk, parsed.err, controller);
-            }
-          },
-        }),
-      ),
-    );
-  }
-}
-
-function jsonParse(
-  text: string,
-): { ok: true; value: unknown } | { ok: false; err: Error } {
-  try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch (err: any) {
-    return { ok: false, err };
+  constructor({ onError }: NewlineDelimitedJsonDecoderStreamOptions = {}) {
+    let splitter!: LineSplitter;
+    super({
+      start(controller) {
+        splitter = new LineSplitter((text, start, end) => {
+          const line = text.slice(start, end);
+          const value = tryParse(line);
+          if (lastError) handleError(onError, line, controller);
+          else controller.enqueue(value);
+        });
+      },
+      transform(chunk) {
+        splitter.write(chunk);
+      },
+      flush() {
+        splitter.end();
+      },
+    });
   }
 }

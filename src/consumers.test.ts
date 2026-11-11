@@ -1,6 +1,6 @@
 import { test, expect } from "vitest";
 import { bytes, json, text } from "./consumers.js";
-import { readableStream, trackedSource } from "./StreamTestUtils.js";
+import { readableStream, trackedSource } from "./internal/StreamTestUtils.js";
 
 const encode = (value: string) => new TextEncoder().encode(value);
 

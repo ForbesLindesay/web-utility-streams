@@ -4,7 +4,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 import MapStream from "./MapStream.js";
 import NewlineDelimitedJsonEncoderStream from "./NewlineDelimitedJsonEncoderStream.js";
 import SplitLinesStream from "./SplitLinesStream.js";

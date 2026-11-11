@@ -1,4 +1,4 @@
-import { createJsonTokenizer, type JsonToken } from "./JsonTokenizer.js";
+import JsonTokenizer, { type JsonToken } from "./internal/JsonTokenizer.js";
 
 export interface JsonDecoderStreamOptions {
   /**
@@ -70,8 +70,11 @@ interface Container {
  * The entire document is validated, but only the elements being emitted are
  * kept in memory, so other (potentially large) properties are discarded as
  * they are parsed. To receive those other properties instead, pass an
- * `onExtraData` callback. If the document is not valid JSON, the stream is errored as
- * soon as the problem is found. If there is no array/object at `path`, the
+ * `onExtraData` callback. If the document is not valid JSON, the stream is
+ * errored when the problem is found. For speed, each element (and each
+ * object/array that is being discarded) is parsed in one go when its end is
+ * reached, so a problem inside one is found when its end is reached, or after
+ * 1MB of it, for larger values. If there is no array/object at `path`, the
  * stream is errored once the whole document has been parsed. Because elements
  * are emitted as soon as they are parsed, some elements may be emitted before
  * an error is found later in the document.
@@ -86,11 +89,11 @@ export default class JsonDecoderStream extends TransformStream<
   unknown
 > {
   constructor({ path = [], onExtraData }: JsonDecoderStreamOptions = {}) {
-    const tokenizer = createJsonTokenizer("JsonDecoderStream");
     const stack: Container[] = [];
     let finished = false;
     let foundTarget = false;
     let extraData: unknown;
+    let controller!: TransformStreamDefaultController<unknown>;
 
     const unexpected = (token: JsonToken): never => {
       const description =
@@ -140,10 +143,7 @@ export default class JsonDecoderStream extends TransformStream<
      * A value (scalar, object or array) has been completely parsed.
      * `value` is only meaningful if the parent is being built or emitted.
      */
-    const endValue = (
-      value: unknown,
-      controller: TransformStreamDefaultController<unknown>,
-    ) => {
+    const endValue = (value: unknown) => {
       const parent = stack.at(-1);
       if (!parent) {
         extraData = value;
@@ -155,28 +155,44 @@ export default class JsonDecoderStream extends TransformStream<
           parent.kind === "object" ? [parent.key, value] : value,
         );
       } else if (parent.mode === "build" || onExtraData) {
-        if (Array.isArray(parent.value)) {
-          parent.value.push(value);
-        } else {
+        if (parent.kind === "array") {
+          (parent.value as unknown[]).push(value);
+        } else if (parent.key === "__proto__") {
           // Use defineProperty rather than assignment so that a key of
           // "__proto__" creates a property (like JSON.parse does) rather
-          // than changing the object's prototype.
-          Object.defineProperty(parent.value, parent.key!, {
+          // than changing the object's prototype. This is much slower than
+          // assignment, so we only use it when we need to.
+          Object.defineProperty(parent.value, parent.key, {
             value,
             writable: true,
             enumerable: true,
             configurable: true,
           });
+        } else {
+          (parent.value as Record<string, unknown>)[parent.key!] = value;
         }
       }
       parent.expects = ",";
       parent.canEnd = true;
     };
 
-    const handleToken = (
-      token: JsonToken,
-      controller: TransformStreamDefaultController<unknown>,
-    ) => {
+    /**
+     * Called with the text of a whole object/array that we are building or
+     * skipping. Returns false if the text isn't valid, so the tokenizer emits
+     * its tokens instead, and the problem is reported by `handleToken`.
+     */
+    const onCaptured = (text: string): boolean => {
+      let value: unknown;
+      try {
+        value = JSON.parse(text);
+      } catch {
+        return false;
+      }
+      endValue(value);
+      return true;
+    };
+
+    const handleToken = (token: JsonToken) => {
       if (finished) return unexpected(token);
 
       const top = stack.at(-1);
@@ -190,7 +206,7 @@ export default class JsonDecoderStream extends TransformStream<
       if (token.type === "LITERAL") {
         // A string, number, boolean or null value
         if (top && top.expects !== "value") return unexpected(token);
-        endValue(token.value, controller);
+        endValue(token.value);
         return;
       }
       switch (token.value) {
@@ -198,6 +214,16 @@ export default class JsonDecoderStream extends TransformStream<
         case "[": {
           const kind = token.value === "{" ? "object" : "array";
           const mode = childMode(token);
+          // It's much faster to parse the text of a whole value with
+          // JSON.parse than to build (or just validate) it from the tokens.
+          // Values that are too large to capture are still handled as tokens
+          // below.
+          if (
+            (mode === "build" || mode === "skip") &&
+            tokenizer.captureValue(onCaptured)
+          ) {
+            return;
+          }
           stack.push({
             kind,
             mode,
@@ -218,7 +244,7 @@ export default class JsonDecoderStream extends TransformStream<
           const kind = token.value === "}" ? "object" : "array";
           if (top?.kind !== kind || !top.canEnd) return unexpected(token);
           stack.pop();
-          endValue(top.value, controller);
+          endValue(top.value);
           return;
         }
         case ":":
@@ -233,12 +259,17 @@ export default class JsonDecoderStream extends TransformStream<
       }
     };
 
+    const tokenizer = new JsonTokenizer("JsonDecoderStream", handleToken);
+
     super({
-      transform(chunk, controller) {
-        tokenizer.write(chunk, (token) => handleToken(token, controller));
+      start(c) {
+        controller = c;
       },
-      flush(controller) {
-        tokenizer.end((token) => handleToken(token, controller));
+      transform(chunk) {
+        tokenizer.write(chunk);
+      },
+      flush() {
+        tokenizer.end();
         if (!finished) {
           throw new SyntaxError(
             "JsonDecoderStream: Unexpected end of JSON input",

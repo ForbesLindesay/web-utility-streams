@@ -4,7 +4,7 @@ import {
   readableStream,
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 async function split(chunks: string[]) {
   const results = await readableStreamResults(

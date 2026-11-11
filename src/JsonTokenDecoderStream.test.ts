@@ -5,7 +5,7 @@ import JsonTokenDecoderStream, {
 import {
   readableStreamResults,
   testTransformRobustness,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 /**
  * Enqueue all chunks at once, so tests with many chunks are fast. The

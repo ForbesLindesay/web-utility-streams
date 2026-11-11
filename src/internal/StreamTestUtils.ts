@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import readableStreamToGenerator from "./readableStreamToGenerator.js";
+import readableStreamToGenerator from "../readableStreamToGenerator.js";
 
 export async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));

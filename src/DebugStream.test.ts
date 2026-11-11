@@ -6,7 +6,7 @@ import {
   readableStreamResults,
   testTransformRobustness,
   trackedSource,
-} from "./StreamTestUtils.js";
+} from "./internal/StreamTestUtils.js";
 
 test("DebugStream - Logs values and passes them through unchanged", async () => {
   const logged: number[] = [];

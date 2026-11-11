@@ -1,7 +1,10 @@
 // https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
 
 import type { EventSourceEvent } from "./EventSourceDecoderStream.js";
-import { DEFAULT_LINE_ENDING, type LineEnding } from "./LineEndings.js";
+import {
+  DEFAULT_LINE_ENDING,
+  type LineEnding,
+} from "./internal/LineEndings.js";
 
 const DEFAULT_EVENT_TYPE = "message";
 const LINE_BREAK = /\r\n|\r|\n/;
@@ -79,9 +82,13 @@ function encodeEvent(
     result += `retry: ${retryMilliseconds}${lineEnding}`;
   }
   assertString("data", data);
+  // Always include the space after the colon, so that if the line itself
+  // starts with a space, that space is preserved when decoding.
+  if (!hasLineBreak(data)) {
+    // Most data is a single line, which we can encode without the regex
+    return `${result}data: ${data}${lineEnding}${lineEnding}`;
+  }
   for (const line of data.split(LINE_BREAK)) {
-    // Always include the space after the colon, so that if the line itself
-    // starts with a space, that space is preserved when decoding.
     result += `data: ${line}${lineEnding}`;
   }
   return result + lineEnding;
@@ -94,9 +101,16 @@ function assertString(name: string, value: string) {
     );
   }
 }
+/**
+ * Quicker than testing `LINE_BREAK`, as `includes` doesn't use the regex
+ * engine
+ */
+function hasLineBreak(value: string) {
+  return value.includes("\n") || value.includes("\r");
+}
 function assertSingleLine(name: string, value: string) {
   assertString(name, value);
-  if (LINE_BREAK.test(value)) {
+  if (hasLineBreak(value)) {
     throw new TypeError(
       `EventSourceEncoderStream: "${name}" cannot contain line breaks`,
     );
