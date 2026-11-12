@@ -116,3 +116,20 @@ for (const [name, consume] of [
     expect(source.state.cancelled).toBe(true);
   });
 }
+
+test("textFromStream - keeps text in order when a string follows an incomplete character", async () => {
+  // The first two bytes of "€", which is never completed
+  expect(
+    await textFromStream(
+      readableStream(["a", new Uint8Array([0xe2, 0x82]), "b"]),
+    ),
+  ).toBe("a�b");
+});
+
+test("textFromStream - keeps a byte order mark that is not at the start", async () => {
+  expect(
+    await textFromStream(
+      readableStream(["a", new Uint8Array([0xef, 0xbb, 0xbf, 0x62])]),
+    ),
+  ).toBe("a﻿b");
+});

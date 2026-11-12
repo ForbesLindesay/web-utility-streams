@@ -17,8 +17,9 @@ export type ConsumableStream =
   ReadableStream<ConsumableChunk> | AsyncIterable<ConsumableChunk>;
 
 /**
- * Read the entire stream, and decode its contents as UTF-8 text. A leading
- * byte order mark is removed. Rejects if the stream errors.
+ * Read the entire stream, and decode its contents as UTF-8 text. If the stream
+ * starts with bytes, a leading UTF-8 byte order mark is removed (string chunks
+ * are used as they are). Rejects if the stream errors.
  */
 export async function textFromStream(
   stream: ConsumableStream,
@@ -32,7 +33,11 @@ export async function textFromStream(
       return await textFromStreamOfStrings(chunks, firstChunk.value);
     return await textFromStreamOfBytes(chunks, toUint8Array(firstChunk.value));
   } catch (ex) {
-    await chunks.return?.();
+    try {
+      await chunks.return?.();
+    } catch {
+      // Prefer re-throwing the original error over any error from cleanup
+    }
     throw ex;
   }
 }
@@ -41,20 +46,30 @@ async function textFromStreamOfStrings(
   stream: AsyncIterator<ConsumableChunk>,
   firstChunk: string,
 ): Promise<string> {
-  let decoder;
+  // Only used for byte chunks that come after a string, so a byte order mark
+  // in them is not at the start of the text, and must not be removed.
+  let decoder: TextDecoder | undefined;
+  // Whether `decoder` may be holding the start of an incomplete character
+  let decoderHasBytes = false;
   let result = firstChunk;
   let next = await stream.next();
   while (!next.done) {
     if (typeof next.value === "string") {
+      // Flush any incomplete character first, so the text stays in order
+      if (decoderHasBytes) {
+        result += decoder!.decode();
+        decoderHasBytes = false;
+      }
       result += next.value;
     } else {
-      decoder ??= new TextDecoder();
+      decoder ??= new TextDecoder("utf-8", { ignoreBOM: true });
       result += decoder.decode(toUint8Array(next.value), { stream: true });
+      decoderHasBytes = true;
     }
     next = await stream.next();
   }
-  if (!decoder) return result;
-  return result + decoder.decode();
+  if (!decoderHasBytes) return result;
+  return result + decoder!.decode();
 }
 
 async function textFromStreamOfBytes(

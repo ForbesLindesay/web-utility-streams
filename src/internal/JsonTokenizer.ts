@@ -3,14 +3,6 @@
 // `JsonDecoderStream` can process tokens directly, without the overhead of
 // passing each token through a stream.
 
-/**
- * Called with the complete text of a captured object/array, and the position
- * of its first character. Return `false` if the text could not be parsed, and
- * the tokenizer will emit its tokens instead, so the problem can be found and
- * reported.
- */
-export type CapturedValueHandler = (value: unknown) => void;
-
 // Character codes
 export const TAB = 9;
 export const LINE_FEED = 10;
@@ -335,6 +327,9 @@ export default class JsonTokenizer {
         if (end === chunk.length) {
           // The string continues in the next chunk
           this._tokenText += chunk.slice(i);
+          if (this._tokenText.length > this._maxValueLength) {
+            this._valueExceedsMaxLength(this._tokenPosition);
+          }
           i = end;
         } else {
           this._tokenText += chunk.slice(i, end + 1);
@@ -356,6 +351,8 @@ export default class JsonTokenizer {
         if (end < chunk.length) {
           if (isNumber) this._endNumber();
           else this._endLiteral();
+        } else if (this._tokenText.length > this._maxValueLength) {
+          this._valueExceedsMaxLength(this._tokenPosition);
         }
         continue;
       }

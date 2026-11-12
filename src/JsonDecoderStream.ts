@@ -26,6 +26,13 @@ export interface JsonDecoderStreamOptions {
    */
   readonly onExtraData?: (extraData: unknown) => void;
 
+  /**
+   * The maximum length, in characters, of any single value in the document
+   * (each emitted element, each discarded object/array, and each string or
+   * number). If a value is longer than this, the stream is errored, so that
+   * an unexpectedly large (or never-ending) value can't use unlimited memory.
+   * Defaults to 100 MiB (`100 * 2 ** 20` characters).
+   */
   readonly maxValueLength?: number;
 }
 
@@ -69,8 +76,9 @@ interface Container {
  * `onExtraData` callback. If the document is not valid JSON, the stream is
  * errored when the problem is found. For speed, each element (and each
  * object/array that is being discarded) is parsed in one go when its end is
- * reached, so a problem inside one is found when its end is reached, or after
- * 1MB of it, for larger values. If there is no array/object at `path`, the
+ * reached, so a problem inside one is found when its end is reached. A value
+ * longer than `maxValueLength` errors the stream as soon as that length is
+ * exceeded. If there is no array/object at `path`, the
  * stream is errored once the whole document has been parsed. Because elements
  * are emitted as soon as they are parsed, some elements may be emitted before
  * an error is found later in the document.
@@ -86,7 +94,7 @@ export default class JsonDecoderStream extends TransformStream<
 > {
   constructor({
     path = [],
-    maxValueLength = 100 * 10 ** 20,
+    maxValueLength = 100 * 2 ** 20,
     onExtraData,
   }: JsonDecoderStreamOptions = {}) {
     // The tokenizer checks the structure of the document, so we only need to
@@ -171,8 +179,7 @@ export default class JsonDecoderStream extends TransformStream<
         const mode = childMode();
         // It's much faster to parse the text of a whole value with
         // JSON.parse than to build (or just validate) it from the tokens.
-        // Values that are too large to capture are still handled as tokens
-        // below.
+        // Values longer than `maxValueLength` error the stream.
         if (mode === "build" || mode === "skip") {
           return true;
         }

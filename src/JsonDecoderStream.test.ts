@@ -717,3 +717,23 @@ test("JsonDecoderStream - matches JSON.parse for random documents, split into ra
     }
   }
 });
+
+test("errors if an element is longer than maxValueLength", async () => {
+  const reader = new ReadableStream<string>({
+    start(controller) {
+      for (const chunk of ['[{"a":', '"xxxxxxxx', 'xxxxxxx"}]']) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  })
+    .pipeThrough(new JsonDecoderStream({ maxValueLength: 10 }))
+    .getReader();
+  await expect(
+    (async () => {
+      while (!(await reader.read()).done);
+    })(),
+  ).rejects.toThrow(
+    /JsonDecoderStream: Value at position 1 exceeds the configured maximum value length of 10/,
+  );
+});

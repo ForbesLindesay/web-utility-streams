@@ -258,3 +258,32 @@ testTransformRobustness({
   validInput: [`[{"a"`, `: 1}, "b"`, `, 2]`],
   invalidInput: `'`,
 });
+
+test("errors if a string is longer than maxValueLength", async () => {
+  const reader = chunks(['["abc', "def", 'ghi"]'])
+    .pipeThrough(new JsonTokenDecoderStream({ maxValueLength: 5 }))
+    .getReader();
+  await expect(
+    (async () => {
+      while (!(await reader.read()).done);
+    })(),
+  ).rejects.toThrow(
+    /JsonTokenDecoderStream: Value at position 1 exceeds the configured maximum value length of 5/,
+  );
+});
+
+test("errors if a number or literal is longer than maxValueLength", async () => {
+  for (const values of [
+    ["[123", "456", "789]"],
+    ["[tru", "eeee", "eee]"],
+  ]) {
+    const reader = chunks(values)
+      .pipeThrough(new JsonTokenDecoderStream({ maxValueLength: 5 }))
+      .getReader();
+    await expect(
+      (async () => {
+        while (!(await reader.read()).done);
+      })(),
+    ).rejects.toThrow(/exceeds the configured maximum value length of 5/);
+  }
+});

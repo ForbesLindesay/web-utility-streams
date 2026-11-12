@@ -1,6 +1,12 @@
 import JsonTokenizer from "./internal/JsonTokenizer.js";
 
 export interface JsonTokenDecoderStreamOptions {
+  /**
+   * The maximum length, in characters, of any single string, number or
+   * literal token. If a token is longer than this, the stream is errored, so
+   * that an unexpectedly large (or never-ending) token can't use unlimited
+   * memory. Defaults to 100 MiB (`100 * 2 ** 20` characters).
+   */
   readonly maxValueLength?: number;
 }
 
