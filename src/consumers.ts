@@ -27,10 +27,14 @@ export async function textFromStream(
   const firstChunk = await chunks.next();
   if (firstChunk.done) return "";
 
-  if (typeof firstChunk.value === "string") {
-    return await textFromStreamOfStrings(chunks, firstChunk.value);
+  try {
+    if (typeof firstChunk.value === "string")
+      return await textFromStreamOfStrings(chunks, firstChunk.value);
+    return await textFromStreamOfBytes(chunks, toUint8Array(firstChunk.value));
+  } catch (ex) {
+    await chunks.return?.();
+    throw ex;
   }
-  return await textFromStreamOfBytes(chunks, toUint8Array(firstChunk.value));
 }
 
 async function textFromStreamOfStrings(

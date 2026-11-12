@@ -4,58 +4,50 @@
 // passing each token through a stream.
 
 /**
- * A token in a JSON document. `position` is the index of the token's first
- * character in the input text.
- *
- * A string is a `KEY` token if it is directly inside an object, immediately
- * after the `{` or a `,`. All other strings are `LITERAL` tokens.
- */
-export type JsonToken =
-  | {
-      readonly type: "PUNCTUATION";
-      readonly value: "{" | "}" | "[" | "]" | ":" | ",";
-      readonly position: number;
-    }
-  | {
-      readonly type: "KEY";
-      readonly value: string;
-      readonly position: number;
-    }
-  | {
-      readonly type: "LITERAL";
-      readonly value: string | number | boolean | null;
-      readonly position: number;
-    };
-
-/**
  * Called with the complete text of a captured object/array, and the position
  * of its first character. Return `false` if the text could not be parsed, and
  * the tokenizer will emit its tokens instead, so the problem can be found and
  * reported.
  */
-export type CapturedValueHandler = (text: string, position: number) => boolean;
-
-/**
- * Objects/arrays larger than this are emitted as tokens, rather than
- * captured, so that the text of a huge (or invalid and never-ending) value is
- * not kept in memory.
- */
-const MAX_CAPTURE_LENGTH = 1 << 20;
+export type CapturedValueHandler = (value: unknown) => void;
 
 // Character codes
-const TAB = 9;
-const LINE_FEED = 10;
-const CARRIAGE_RETURN = 13;
-const SPACE = 32;
-const QUOTE = 34;
-const COMMA = 44;
-const MINUS = 45;
-const COLON = 58;
-const OPEN_BRACKET = 91;
-const BACKSLASH = 92;
-const CLOSE_BRACKET = 93;
-const OPEN_BRACE = 123;
-const CLOSE_BRACE = 125;
+export const TAB = 9;
+export const LINE_FEED = 10;
+export const CARRIAGE_RETURN = 13;
+export const SPACE = 32;
+export const QUOTE = 34;
+export const COMMA = 44;
+export const MINUS = 45;
+export const COLON = 58;
+export const OPEN_ARRAY = 91; // [
+export const BACKSLASH = 92;
+export const CLOSE_ARRAY = 93; // ]
+export const OPEN_OBJECT = 123; // {
+export const CLOSE_OBJECT = 125; // }
+
+// What can come next in the document.
+// Each state is a power of 2 so it can be checked using bitwise operators
+
+/** `}` or `]`: after a value or an open `{` or `[` */
+const STATE_CLOSE = 1;
+/** A value: at the start of the document, after a `:`, or after a `,` in an array */
+const STATE_VALUE = 2;
+/** A key: after a `{` or a `,` in an object */
+const STATE_KEY = 4;
+/** A `:`: after a key */
+const STATE_COLON = 8;
+/** A `,` or the end of the object/array: after a value */
+const STATE_COMMA = 16;
+/** Nothing (other than whitespace): after the document's root value */
+const STATE_DONE = 32;
+
+// In a STATE_VALUE or STATE_KEY we add these to indicate what type of value it is
+const STATE_STRING = 64;
+const STATE_NUMBER = 128;
+const STATE_LITERAL = 256;
+
+type State = number;
 
 const isNumberChar = (code: number) =>
   (code >= 48 && code <= 57) || // 0-9
@@ -68,17 +60,38 @@ const isNumberChar = (code: number) =>
 const isLetter = (code: number) =>
   (code >= 97 && code <= 122) || (code >= 65 && code <= 90);
 
+export interface Handlers {
+  onLiteral: (value: unknown, position: number) => void;
+  onKey: (value: string, position: number) => void;
+  // Return true to capture the value and pass it to `onLiteral`
+  onOpen: (
+    code: typeof OPEN_ARRAY | typeof OPEN_OBJECT,
+    position: number,
+  ) => boolean;
+  onClose: (
+    code: typeof CLOSE_ARRAY | typeof CLOSE_OBJECT,
+    position: number,
+  ) => void;
+  onPunctuation: (code: typeof COMMA | typeof COLON, position: number) => void;
+}
+const IGNORE_ALL_TOKENS_HANDLERS: Handlers = {
+  onLiteral() {},
+  onKey() {},
+  onOpen: () => false,
+  onClose() {},
+  onPunctuation() {},
+};
 /**
  * Split JSON text, which can be split into chunks at any point, into tokens.
- * Throws a `SyntaxError`, with a message starting with `name`, for invalid
- * tokens.
+ * The text must be a single JSON value (with optional whitespace around it).
+ * Throws a `SyntaxError`, with a message starting with `name`, for an invalid
+ * token, or a token in the wrong place, as soon as it is found.
  */
 export default class JsonTokenizer {
   private readonly _name: string;
-  private readonly _onToken: (token: JsonToken) => void;
-  // Strings, numbers and literals can be split across chunks, so we
-  // accumulate the text of the current token until it is complete.
-  private _tokenKind: "string" | "number" | "literal" | null = null;
+  private readonly _maxValueLength: number;
+  // Return true to "capture" the value
+  private _handlers: Handlers;
   private _tokenText = "";
   private _tokenPosition = 0;
   private _isEscaped = false;
@@ -87,28 +100,24 @@ export default class JsonTokenizer {
   private _stringNeedsParsing = false;
   // The number of characters in all previous chunks
   private _offset = 0;
-  // To tell keys apart from other strings, we track which brackets are open,
-  // and whether the next token is in the position of an object key. We don't
-  // check that the brackets match, as we don't check the document structure.
-  private readonly _openBrackets: ("{" | "[")[] = [];
-  private _isKeyPosition = false;
+  // The structure of the document: the brackets that are open (as character
+  // codes), and what can come next. This is also how we tell keys apart from
+  // other strings.
+  private readonly _openBrackets: (typeof OPEN_ARRAY | typeof OPEN_OBJECT)[] =
+    [];
+  private _state: State = STATE_VALUE;
 
-  // While capturing an object/array, we only track strings and the depth of
-  // brackets, to find where it ends. The text is checked by `onCaptured`.
-  private _onCaptured: CapturedValueHandler | null = null;
   private _captureRequested = false;
   private _capturePosition = 0;
   private _captureText = "";
   private _captureDepth = 0;
   private _captureInString = false;
   private _captureIsEscaped = false;
-  // Set while re-emitting a captured value as tokens, so that it isn't
-  // captured again
-  private _preventCapture = false;
 
-  constructor(name: string, onToken: (token: JsonToken) => void) {
+  constructor(name: string, maxValueLength: number, handlers: Handlers) {
     this._name = name;
-    this._onToken = onToken;
+    this._maxValueLength = maxValueLength;
+    this._handlers = handlers;
   }
 
   private _unexpected(description: string, position: number): never {
@@ -117,55 +126,94 @@ export default class JsonTokenizer {
     );
   }
 
-  private _endToken(): JsonToken {
+  /**
+   * A value (of any type) has ended
+   */
+  private _endValue(): void {
+    this._state =
+      this._openBrackets.length === 0 ? STATE_DONE : STATE_COMMA | STATE_CLOSE;
+  }
+
+  private _endLiteral(): void {
     const text = this._tokenText;
-    const kind = this._tokenKind;
-    const position = this._tokenPosition;
-    const isKey = this._isKeyPosition;
-    this._tokenKind = null;
     this._tokenText = "";
-    this._isKeyPosition = false;
-    if (kind === "literal") {
-      switch (text) {
-        case "true":
-          return { type: "LITERAL", value: true, position };
-        case "false":
-          return { type: "LITERAL", value: false, position };
-        case "null":
-          return { type: "LITERAL", value: null, position };
-        default:
-          return this._unexpected(`token ${text}`, position);
-      }
+
+    if ((this._state & STATE_VALUE) !== STATE_VALUE) {
+      return this._unexpected(`token ${text}`, this._tokenPosition);
     }
-    let value: string | number;
-    if (kind === "string" && !this._stringNeedsParsing) {
-      value = text.slice(1, -1);
+
+    let value: boolean | null;
+    switch (text) {
+      case "true":
+        value = true;
+        break;
+      case "false":
+        value = false;
+        break;
+      case "null":
+        value = null;
+        break;
+      default:
+        return this._unexpected(`token ${text}`, this._tokenPosition);
+    }
+
+    this._handlers.onLiteral(value, this._tokenPosition);
+    this._endValue();
+  }
+  private _endNumber(): void {
+    const text = this._tokenText;
+    this._tokenText = "";
+
+    if ((this._state & STATE_VALUE) !== STATE_VALUE) {
+      return this._unexpected(`number ${text}`, this._tokenPosition);
+    }
+
+    let value: number;
+    // JSON.parse validates the number format
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return this._unexpected(`number ${text}`, this._tokenPosition);
+    }
+
+    this._handlers.onLiteral(value, this._tokenPosition);
+    this._endValue();
+  }
+  private _endString(): void {
+    let value = this._tokenText;
+    this._tokenText = "";
+    if (!this._stringNeedsParsing) {
+      value = value.slice(1, -1);
     } else {
-      // JSON.parse validates the string escapes or number format
+      // JSON.parse validates the string escapes
       try {
-        value = JSON.parse(text);
+        value = JSON.parse(value);
       } catch {
-        return this._unexpected(
-          kind === "string" ? "string" : `number ${text}`,
-          position,
-        );
+        return this._unexpected(`string`, this._tokenPosition);
       }
     }
-    return kind === "string" && isKey
-      ? { type: "KEY", value: value as string, position }
-      : { type: "LITERAL", value, position };
+    if ((this._state & STATE_KEY) === STATE_KEY) {
+      this._handlers.onKey(value, this._tokenPosition);
+      this._state = STATE_COLON;
+    } else if ((this._state & STATE_VALUE) === STATE_VALUE) {
+      this._handlers.onLiteral(value, this._tokenPosition);
+      this._endValue();
+    } else {
+      this._unexpected(`string`, this._tokenPosition);
+    }
   }
 
   /**
-   * Stop capturing, and process the captured text (plus `rest`, the
-   * remainder of the current chunk) as tokens instead.
+   * Stop capturing, and process `text` as tokens instead. `text` must start
+   * at the beginning of the captured value (`_capturePosition`), and can
+   * include the rest of the current chunk after it.
    */
-  private _emitCapturedAsTokens(text: string, rest: string): void {
-    this._onCaptured = null;
+  private _evaluateCapturedAsTokens(text: string): void {
+    this._captureRequested = false;
     this._captureText = "";
-    this._preventCapture = true;
+    this._handlers = IGNORE_ALL_TOKENS_HANDLERS;
     this._offset = this._capturePosition;
-    this.write(text + rest);
+    this.write(text);
   }
 
   /**
@@ -207,9 +255,9 @@ export default class JsonTokenizer {
       const code = chunk.charCodeAt(j);
       if (code === QUOTE) {
         inString = true;
-      } else if (code === OPEN_BRACE || code === OPEN_BRACKET) {
+      } else if (code === OPEN_OBJECT || code === OPEN_ARRAY) {
         depth++;
-      } else if (code === CLOSE_BRACE || code === CLOSE_BRACKET) {
+      } else if (code === CLOSE_OBJECT || code === CLOSE_ARRAY) {
         if (--depth === 0) {
           this._captureDepth = 0;
           return j + 1;
@@ -222,37 +270,44 @@ export default class JsonTokenizer {
     return -1;
   }
 
+  private _valueExceedsMaxLength(position: number): never {
+    throw new Error(
+      `${this._name}: Value at position ${position} exceeds the configured maximum value length of ${this._maxValueLength.toLocaleString()}`,
+    );
+  }
   /**
    * Process the next chunk of text, calling `onToken` for each complete token
    */
   write(chunk: string): void {
-    const onToken = this._onToken;
     let i = 0;
     while (i < chunk.length) {
-      if (this._onCaptured !== null) {
+      if (this._captureRequested) {
         const end = this._scanCapture(chunk, i);
         if (end === -1) {
           // The value continues in the next chunk
           this._captureText += chunk.slice(i);
-          if (this._captureText.length > MAX_CAPTURE_LENGTH) {
-            this._emitCapturedAsTokens(this._captureText, "");
-            return;
+          if (this._captureText.length > this._maxValueLength) {
+            this._valueExceedsMaxLength(this._capturePosition);
           }
           break;
         }
+        this._captureRequested = false;
         const text = this._captureText + chunk.slice(i, end);
-        const handler = this._onCaptured;
-        this._onCaptured = null;
-        this._captureText = "";
-        if (!handler(text, this._capturePosition)) {
-          this._emitCapturedAsTokens(text, chunk.slice(end));
+        let captured;
+        try {
+          captured = JSON.parse(text);
+        } catch {
+          // Re-read from the start of the value, which is at `i` in this chunk
+          this._evaluateCapturedAsTokens(this._captureText + chunk.slice(i));
           return;
         }
-        this._isKeyPosition = false;
+        this._captureText = "";
+        this._handlers.onLiteral(captured, this._capturePosition);
+        this._endValue();
         i = end;
         continue;
       }
-      if (this._tokenKind === "string") {
+      if ((this._state & STATE_STRING) === STATE_STRING) {
         let end = i;
         let isEscaped = this._isEscaped;
         let needsParsing = this._stringNeedsParsing;
@@ -280,19 +335,24 @@ export default class JsonTokenizer {
         } else {
           this._tokenText += chunk.slice(i, end + 1);
           i = end + 1;
-          onToken(this._endToken());
+          this._endString();
         }
         continue;
       }
-      if (this._tokenKind !== null) {
-        const isPart = this._tokenKind === "number" ? isNumberChar : isLetter;
+      const isLiteral = (this._state & STATE_LITERAL) === STATE_LITERAL;
+      const isNumber = (this._state & STATE_NUMBER) === STATE_NUMBER;
+      if (isLiteral || isNumber) {
+        const isPart = isNumber ? isNumberChar : isLetter;
         let end = i;
         while (end < chunk.length && isPart(chunk.charCodeAt(end))) end++;
         this._tokenText += chunk.slice(i, end);
         i = end;
         // If we reached the end of the chunk, the token may continue in
         // the next chunk. Otherwise, the next character ends the token.
-        if (end < chunk.length) onToken(this._endToken());
+        if (end < chunk.length) {
+          if (isNumber) this._endNumber();
+          else this._endLiteral();
+        }
         continue;
       }
 
@@ -305,46 +365,63 @@ export default class JsonTokenizer {
         case TAB:
           i++;
           break;
-        case OPEN_BRACE:
-        case OPEN_BRACKET: {
-          const char = code === OPEN_BRACE ? "{" : "[";
-          this._openBrackets.push(char);
-          this._isKeyPosition = code === OPEN_BRACE;
-          this._captureRequested = false;
-          onToken({ type: "PUNCTUATION", value: char, position });
-          this._preventCapture = false;
-          if (this._captureRequested) {
-            // Scan from the bracket, so it's included in the text
-            this._openBrackets.pop();
+        case OPEN_OBJECT:
+        case OPEN_ARRAY: {
+          if ((this._state & STATE_VALUE) !== STATE_VALUE) {
+            this._unexpected(`token ${chunk[i]}`, position);
+          }
+          if (this._handlers.onOpen(code, position)) {
+            this._captureRequested = true;
             this._capturePosition = position;
             this._captureDepth = 0;
             this._captureInString = false;
             this._captureIsEscaped = false;
           } else {
+            this._openBrackets.push(code);
+            this._state =
+              (code === OPEN_OBJECT ? STATE_KEY : STATE_VALUE) | STATE_CLOSE;
             i++;
           }
           break;
         }
-        case CLOSE_BRACE:
-        case CLOSE_BRACKET:
         case COLON:
-        case COMMA: {
-          if (code === CLOSE_BRACE || code === CLOSE_BRACKET) {
-            this._openBrackets.pop();
+          if (this._state !== STATE_COLON) {
+            this._unexpected("token :", position);
           }
-          this._isKeyPosition =
-            code === COMMA &&
-            this._openBrackets[this._openBrackets.length - 1] === "{";
-          onToken({
-            type: "PUNCTUATION",
-            value: chunk[i] as "}" | "]" | ":" | ",",
-            position,
-          });
+          this._state = STATE_VALUE;
+          this._handlers.onPunctuation?.(code, position);
+          i++;
+          break;
+        case COMMA:
+          if ((this._state & STATE_COMMA) !== STATE_COMMA) {
+            this._unexpected("token ,", position);
+          }
+          this._state =
+            this._openBrackets[this._openBrackets.length - 1] === OPEN_OBJECT
+              ? STATE_KEY
+              : STATE_VALUE;
+          this._handlers.onPunctuation?.(code, position);
+          i++;
+          break;
+        case CLOSE_OBJECT:
+        case CLOSE_ARRAY: {
+          // `}` and `]` are 2 more than `{` and `[`
+          if (
+            this._openBrackets[this._openBrackets.length - 1] !== code - 2 ||
+            (this._state & STATE_CLOSE) !== STATE_CLOSE
+          ) {
+            this._unexpected(`token ${chunk[i]}`, position);
+          }
+          this._openBrackets.pop();
+          this._endValue();
+          this._handlers.onClose(code, position);
           i++;
           break;
         }
         case QUOTE:
-          this._tokenKind = "string";
+          // Whether the string is allowed here is checked once it has ended,
+          // when we know whether it's valid
+          this._state = STATE_STRING | this._state;
           this._stringNeedsParsing = false;
           // Consume the opening quote, so the string scanning above
           // doesn't treat it as the closing quote. Numbers and literals
@@ -355,9 +432,9 @@ export default class JsonTokenizer {
           break;
         default:
           if (code === MINUS || (code >= 48 && code <= 57)) {
-            this._tokenKind = "number";
+            this._state = STATE_NUMBER | this._state;
           } else if (isLetter(code)) {
-            this._tokenKind = "literal";
+            this._state = STATE_LITERAL | this._state;
           } else {
             this._unexpected(`character ${JSON.stringify(chunk[i])}`, position);
           }
@@ -371,35 +448,21 @@ export default class JsonTokenizer {
    * Call once there is no more text, to emit any final token
    */
   end(): void {
-    // If the input ended part way through a captured value, emit its
-    // tokens, which will report the problem. Values inside it may be
-    // captured in turn, so repeat until nothing is being captured.
-    while (this._onCaptured !== null) {
-      this._emitCapturedAsTokens(this._captureText, "");
+    // If the input ended part way through a captured value, evaluate its
+    // tokens to produce the error at the right position
+    if (this._captureRequested) {
+      this._evaluateCapturedAsTokens(this._captureText);
     }
-    if (this._tokenKind === "string") {
+    if ((this._state & STATE_NUMBER) === STATE_NUMBER) {
+      // A number at the very end of the input is complete
+      this._endNumber();
+    }
+    if ((this._state & STATE_LITERAL) === STATE_LITERAL) {
+      // A literal at the very end of the input is complete
+      this._endLiteral();
+    }
+    if (this._state !== STATE_DONE) {
       throw new SyntaxError(`${this._name}: Unexpected end of JSON input`);
     }
-    if (this._tokenKind !== null) {
-      // A number or literal at the very end of the input is complete
-      this._onToken(this._endToken());
-    }
-  }
-
-  /**
-   * Call from `onToken`, for a `{` or `[` token, to receive the text of the
-   * whole object/array in a single call to `onCaptured`, rather than as
-   * tokens. This is much faster when the caller needs the value, as it can
-   * pass the text to `JSON.parse`.
-   *
-   * Returns `false` (and nothing is captured) if this object/array is being
-   * re-emitted as tokens, because its text could not be parsed or was too
-   * large to capture.
-   */
-  captureValue(onCaptured: CapturedValueHandler): boolean {
-    if (this._preventCapture) return false;
-    this._onCaptured = onCaptured;
-    this._captureRequested = true;
-    return true;
   }
 }

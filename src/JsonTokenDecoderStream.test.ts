@@ -144,12 +144,76 @@ test("JsonTokenDecoderStream - gives the same tokens however the input is split"
   }
 });
 
-test("JsonTokenDecoderStream - does not check the structure of the document", async () => {
-  expect(
-    (await tokenize([`[1, } : "a" ]]`])).map((token) =>
-      token.type === "PUNCTUATION" ? token.value : typeof token.value,
-    ),
-  ).toEqual(["[", "number", ",", "}", ":", "string", "]", "]"]);
+test("JsonTokenDecoderStream - errors on tokens in the wrong place", async () => {
+  const invalid: [string, string][] = [
+    [`[1 2]`, "Unexpected number 2 at position 3"],
+    [`[1,]`, "Unexpected token ] at position 3"],
+    [`[,1]`, "Unexpected token , at position 1"],
+    [`[1}`, "Unexpected token } at position 2"],
+    [`{"a": 1]`, "Unexpected token ] at position 7"],
+    [`[1]]`, "Unexpected token ] at position 3"],
+    [`}`, "Unexpected token } at position 0"],
+    [`:`, "Unexpected token : at position 0"],
+    [`{"a" 1}`, "Unexpected number 1 at position 5"],
+    [`{"a": 1,}`, "Unexpected token } at position 8"],
+    [`{"a"}`, "Unexpected token } at position 4"],
+    [`{1: 2}`, "Unexpected number 1 at position 1"],
+    [`{true: 2}`, "Unexpected token true at position 1"],
+    [`{"a": 1 "b": 2}`, "Unexpected string at position 8"],
+    [`{"a": "b": 1}`, "Unexpected token : at position 9"],
+    [`{"a":: 1}`, "Unexpected token : at position 5"],
+    [`{{}}`, "Unexpected token { at position 1"],
+    [`["a": 1]`, "Unexpected token : at position 4"],
+    // Only a single value is allowed
+    [`[1] [2]`, "Unexpected token [ at position 4"],
+    [`1 2`, "Unexpected number 2 at position 2"],
+    [`"a" "b"`, "Unexpected string at position 4"],
+    [`{} null`, "Unexpected token null at position 3"],
+    // Incomplete documents
+    [``, "Unexpected end of JSON input"],
+    [` \t\r\n `, "Unexpected end of JSON input"],
+    [`[1`, "Unexpected end of JSON input"],
+    [`[1,`, "Unexpected end of JSON input"],
+    [`{"a"`, "Unexpected end of JSON input"],
+    [`{"a":`, "Unexpected end of JSON input"],
+    [`[[{}]`, "Unexpected end of JSON input"],
+  ];
+  for (const [text, message] of invalid) {
+    for (const values of [[text], text.split("")]) {
+      expect(await tokenizeError(values), text).toMatchObject({
+        name: "SyntaxError",
+        message: `JsonTokenDecoderStream: ${message}`,
+      });
+    }
+  }
+});
+
+test("JsonTokenDecoderStream - emits the tokens before a problem", async () => {
+  const results = await readableStreamResults(
+    chunks([`[1, `, `2] 3`]).pipeThrough(new JsonTokenDecoderStream()),
+  );
+  expect(results.map((result) => result.ok && result.value)).toEqual([
+    { type: "PUNCTUATION", value: "[", position: 0 },
+    { type: "LITERAL", value: 1, position: 1 },
+    { type: "PUNCTUATION", value: ",", position: 2 },
+    { type: "LITERAL", value: 2, position: 4 },
+    { type: "PUNCTUATION", value: "]", position: 5 },
+    false,
+  ]);
+});
+
+test("JsonTokenDecoderStream - allows any value at the root, and whitespace around it", async () => {
+  expect(await tokenize([` \n[]\n `])).toEqual([
+    { type: "PUNCTUATION", value: "[", position: 2 },
+    { type: "PUNCTUATION", value: "]", position: 3 },
+  ]);
+  expect(await tokenize([`{}`])).toHaveLength(2);
+  expect(await tokenize([` null `])).toEqual([
+    { type: "LITERAL", value: null, position: 1 },
+  ]);
+  expect(await tokenize([`"a"`])).toEqual([
+    { type: "LITERAL", value: "a", position: 0 },
+  ]);
 });
 
 test("JsonTokenDecoderStream - a number or literal at the end of the input is emitted", async () => {
@@ -159,11 +223,6 @@ test("JsonTokenDecoderStream - a number or literal at the end of the input is em
   expect(await tokenize(["tr", "ue"])).toEqual([
     { type: "LITERAL", value: true, position: 0 },
   ]);
-});
-
-test("JsonTokenDecoderStream - emits nothing for empty input or whitespace", async () => {
-  expect(await tokenize([])).toEqual([]);
-  expect(await tokenize([" \t\r\n "])).toEqual([]);
 });
 
 test("JsonTokenDecoderStream - errors on invalid tokens", async () => {

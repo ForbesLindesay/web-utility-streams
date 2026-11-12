@@ -1,4 +1,7 @@
-import JsonTokenizer, { type JsonToken } from "./internal/JsonTokenizer.js";
+import JsonTokenizer, {
+  OPEN_ARRAY,
+  OPEN_OBJECT,
+} from "./internal/JsonTokenizer.js";
 
 export interface JsonDecoderStreamOptions {
   /**
@@ -22,10 +25,12 @@ export interface JsonDecoderStreamOptions {
    * in memory until the end of the document, rather than being discarded.
    */
   readonly onExtraData?: (extraData: unknown) => void;
+
+  readonly maxValueLength?: number;
 }
 
 interface Container {
-  readonly kind: "object" | "array";
+  readonly kind: typeof OPEN_ARRAY | typeof OPEN_OBJECT;
   /**
    * How we handle a JSON object/array:
    *
@@ -37,15 +42,6 @@ interface Container {
    * - "skip": anything else. We check it is valid JSON, but discard it.
    */
   readonly mode: "path" | "target" | "build" | "skip";
-  /**
-   * What we expect next inside this container
-   */
-  expects:
-    | "key" // after "," in an object or "{"
-    | ":" // after a key
-    | "value" // after ":" in an object, or "," in an array or "["
-    | ","; // after a value
-  canEnd: boolean; // true after a value or immediately after open char
   /**
    * The most recent key, for objects
    */
@@ -88,29 +84,22 @@ export default class JsonDecoderStream extends TransformStream<
   string,
   unknown
 > {
-  constructor({ path = [], onExtraData }: JsonDecoderStreamOptions = {}) {
+  constructor({
+    path = [],
+    maxValueLength = 100 * 10 ** 20,
+    onExtraData,
+  }: JsonDecoderStreamOptions = {}) {
+    // The tokenizer checks the structure of the document, so we only need to
+    // track where we are in it, and build the values we need
     const stack: Container[] = [];
-    let finished = false;
     let foundTarget = false;
     let extraData: unknown;
     let controller!: TransformStreamDefaultController<unknown>;
 
-    const unexpected = (token: JsonToken): never => {
-      const description =
-        typeof token.value === "string" && token.type !== "PUNCTUATION"
-          ? "string"
-          : typeof token.value === "number"
-            ? `number ${token.value}`
-            : `token ${token.value}`;
-      throw new SyntaxError(
-        `JsonDecoderStream: Unexpected ${description} at position ${token.position}`,
-      );
-    };
-
     /**
-     * Check that a value can start here, and decide how to handle it.
+     * Decide how to handle an object/array that is starting
      */
-    const childMode = (token: JsonToken): Container["mode"] => {
+    const childMode = (): Container["mode"] => {
       const parent = stack.at(-1);
       if (!parent) {
         if (!path.length) {
@@ -119,7 +108,6 @@ export default class JsonDecoderStream extends TransformStream<
         }
         return "path";
       }
-      if (parent.expects !== "value") return unexpected(token);
 
       switch (parent.mode) {
         case "path":
@@ -147,15 +135,14 @@ export default class JsonDecoderStream extends TransformStream<
       const parent = stack.at(-1);
       if (!parent) {
         extraData = value;
-        finished = true;
         return;
       }
       if (parent.mode === "target") {
         controller.enqueue(
-          parent.kind === "object" ? [parent.key, value] : value,
+          parent.kind === OPEN_OBJECT ? [parent.key, value] : value,
         );
       } else if (parent.mode === "build" || onExtraData) {
-        if (parent.kind === "array") {
+        if (parent.kind === OPEN_ARRAY) {
           (parent.value as unknown[]).push(value);
         } else if (parent.key === "__proto__") {
           // Use defineProperty rather than assignment so that a key of
@@ -172,94 +159,44 @@ export default class JsonDecoderStream extends TransformStream<
           (parent.value as Record<string, unknown>)[parent.key!] = value;
         }
       }
-      parent.expects = ",";
-      parent.canEnd = true;
     };
 
-    /**
-     * Called with the text of a whole object/array that we are building or
-     * skipping. Returns false if the text isn't valid, so the tokenizer emits
-     * its tokens instead, and the problem is reported by `handleToken`.
-     */
-    const onCaptured = (text: string): boolean => {
-      let value: unknown;
-      try {
-        value = JSON.parse(text);
-      } catch {
+    const tokenizer = new JsonTokenizer("JsonDecoderStream", maxValueLength, {
+      onKey: (key) => {
+        // Keys are always directly inside an object
+        stack[stack.length - 1]!.key = key;
+      },
+      onLiteral: endValue,
+      onOpen: (kind) => {
+        const mode = childMode();
+        // It's much faster to parse the text of a whole value with
+        // JSON.parse than to build (or just validate) it from the tokens.
+        // Values that are too large to capture are still handled as tokens
+        // below.
+        if (mode === "build" || mode === "skip") {
+          return true;
+        }
+        stack.push({
+          kind,
+          mode,
+          key: undefined,
+          value:
+            onExtraData && mode !== "target"
+              ? kind === OPEN_OBJECT
+                ? {}
+                : []
+              : undefined,
+        });
         return false;
-      }
-      endValue(value);
-      return true;
-    };
-
-    const handleToken = (token: JsonToken) => {
-      if (finished) return unexpected(token);
-
-      const top = stack.at(-1);
-      if (token.type === "KEY") {
-        if (top?.expects !== "key") return unexpected(token);
-        top.key = token.value;
-        top.expects = ":";
-        top.canEnd = false;
-        return;
-      }
-      if (token.type === "LITERAL") {
-        // A string, number, boolean or null value
-        if (top && top.expects !== "value") return unexpected(token);
-        endValue(token.value);
-        return;
-      }
-      switch (token.value) {
-        case "{":
-        case "[": {
-          const kind = token.value === "{" ? "object" : "array";
-          const mode = childMode(token);
-          // It's much faster to parse the text of a whole value with
-          // JSON.parse than to build (or just validate) it from the tokens.
-          // Values that are too large to capture are still handled as tokens
-          // below.
-          if (
-            (mode === "build" || mode === "skip") &&
-            tokenizer.captureValue(onCaptured)
-          ) {
-            return;
-          }
-          stack.push({
-            kind,
-            mode,
-            expects: kind === "object" ? "key" : "value",
-            canEnd: true,
-            key: undefined,
-            value:
-              mode === "build" || (onExtraData && mode !== "target")
-                ? kind === "object"
-                  ? {}
-                  : []
-                : undefined,
-          });
-          return;
-        }
-        case "}":
-        case "]": {
-          const kind = token.value === "}" ? "object" : "array";
-          if (top?.kind !== kind || !top.canEnd) return unexpected(token);
-          stack.pop();
-          endValue(top.value);
-          return;
-        }
-        case ":":
-          if (top?.expects !== ":") return unexpected(token);
-          top.expects = "value";
-          return;
-        case ",":
-          if (top?.expects !== ",") return unexpected(token);
-          top.expects = top.kind === "object" ? "key" : "value";
-          top.canEnd = false;
-          return;
-      }
-    };
-
-    const tokenizer = new JsonTokenizer("JsonDecoderStream", handleToken);
+      },
+      onClose: () => {
+        // The tokenizer has checked this matches the open bracket
+        endValue(stack.pop()!.value);
+      },
+      onPunctuation: () => {
+        // ignore all other punctuation
+      },
+    });
 
     super({
       start(c) {
@@ -269,12 +206,8 @@ export default class JsonDecoderStream extends TransformStream<
         tokenizer.write(chunk);
       },
       flush() {
+        // Throws if the document is incomplete
         tokenizer.end();
-        if (!finished) {
-          throw new SyntaxError(
-            "JsonDecoderStream: Unexpected end of JSON input",
-          );
-        }
         if (!foundTarget) {
           throw new TypeError(
             `JsonDecoderStream: Expected an array or object at ${path.length === 0 ? "the root" : `path ${JSON.stringify(path)}`}`,

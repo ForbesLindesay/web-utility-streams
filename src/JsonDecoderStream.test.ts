@@ -316,6 +316,26 @@ test("JsonDecoderStream - errors on invalid JSON outside the target array", asyn
   ).toEqual([ok(1), ok(2), { ok: false }]);
 });
 
+test("JsonDecoderStream - errors on problems with the structure of the document", async () => {
+  const cases: [string, string, string[]?][] = [
+    // Between elements
+    [`[{"a": 1} {"b": 2}]`, "token { at position 10"],
+    [`[[1]}`, "token } at position 4"],
+    // Inside an element
+    [`[{"a": 1]]`, "token ] at position 8"],
+    // Outside the target
+    [`{"results": [1], "x" 1}`, "number 1 at position 21", ["results"]],
+    [`{"results": [1]} x`, "token x at position 17", ["results"]],
+    [`{"results": [1]}]`, "token ] at position 16", ["results"]],
+  ];
+  for (const [text, message, path] of cases) {
+    expect(await decodeError([text], { path }), text).toMatchObject({
+      name: "SyntaxError",
+      message: `JsonDecoderStream: Unexpected ${message}`,
+    });
+  }
+});
+
 test("JsonDecoderStream - error messages include the position", async () => {
   expect(await decodeError([`[1, `, `2, ]`])).toMatchObject({
     message: "JsonDecoderStream: Unexpected token ] at position 7",
