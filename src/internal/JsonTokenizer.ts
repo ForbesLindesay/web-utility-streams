@@ -47,6 +47,13 @@ const STATE_STRING = 64;
 const STATE_NUMBER = 128;
 const STATE_LITERAL = 256;
 
+const STATE_CAPTURE_REQUESTED = 512;
+// In a string, is the next character escaped
+const STATE_ESCAPED = 1024;
+// Whether the current string has any escapes or control characters. If
+// not, we don't need JSON.parse to get its value.
+const STATE_NEEDS_PARSING = 2048;
+
 type State = number;
 
 const isNumberChar = (code: number) =>
@@ -94,10 +101,6 @@ export default class JsonTokenizer {
   private _handlers: Handlers;
   private _tokenText = "";
   private _tokenPosition = 0;
-  private _isEscaped = false;
-  // Whether the current string has any escapes or control characters. If
-  // not, we don't need JSON.parse to get its value.
-  private _stringNeedsParsing = false;
   // The number of characters in all previous chunks
   private _offset = 0;
   // The structure of the document: the brackets that are open (as character
@@ -107,12 +110,9 @@ export default class JsonTokenizer {
     [];
   private _state: State = STATE_VALUE;
 
-  private _captureRequested = false;
   private _capturePosition = 0;
   private _captureText = "";
   private _captureDepth = 0;
-  private _captureInString = false;
-  private _captureIsEscaped = false;
 
   constructor(name: string, maxValueLength: number, handlers: Handlers) {
     this._name = name;
@@ -182,7 +182,7 @@ export default class JsonTokenizer {
   private _endString(): void {
     let value = this._tokenText;
     this._tokenText = "";
-    if (!this._stringNeedsParsing) {
+    if ((this._state & STATE_NEEDS_PARSING) !== STATE_NEEDS_PARSING) {
       value = value.slice(1, -1);
     } else {
       // JSON.parse validates the string escapes
@@ -209,7 +209,7 @@ export default class JsonTokenizer {
    * include the rest of the current chunk after it.
    */
   private _evaluateCapturedAsTokens(text: string): void {
-    this._captureRequested = false;
+    this._state = STATE_VALUE;
     this._captureText = "";
     this._handlers = IGNORE_ALL_TOKENS_HANDLERS;
     this._offset = this._capturePosition;
@@ -223,11 +223,11 @@ export default class JsonTokenizer {
    */
   private _scanCapture(chunk: string, start: number): number {
     let depth = this._captureDepth;
-    let inString = this._captureInString;
+    let inString = (this._state & STATE_STRING) === STATE_STRING;
     let j = start;
-    if (this._captureIsEscaped && j < chunk.length) {
+    if ((this._state & STATE_ESCAPED) === STATE_ESCAPED && j < chunk.length) {
       // The previous chunk ended with a backslash in a string
-      this._captureIsEscaped = false;
+      this._state = this._state & ~STATE_ESCAPED;
       j++;
     }
     while (j < chunk.length) {
@@ -245,7 +245,10 @@ export default class JsonTokenizer {
         }
         if (quote === -1) {
           // The string continues in the next chunk
-          this._captureIsEscaped = backslashes % 2 === 1;
+          this._state =
+            backslashes % 2 === 1
+              ? this._state | STATE_ESCAPED
+              : this._state & ~STATE_ESCAPED;
           break;
         }
         if (backslashes % 2 === 0) inString = false;
@@ -266,7 +269,9 @@ export default class JsonTokenizer {
       j++;
     }
     this._captureDepth = depth;
-    this._captureInString = inString;
+    this._state = inString
+      ? this._state | STATE_STRING
+      : this._state & ~STATE_STRING;
     return -1;
   }
 
@@ -281,7 +286,7 @@ export default class JsonTokenizer {
   write(chunk: string): void {
     let i = 0;
     while (i < chunk.length) {
-      if (this._captureRequested) {
+      if ((this._state & STATE_CAPTURE_REQUESTED) === STATE_CAPTURE_REQUESTED) {
         const end = this._scanCapture(chunk, i);
         if (end === -1) {
           // The value continues in the next chunk
@@ -291,7 +296,6 @@ export default class JsonTokenizer {
           }
           break;
         }
-        this._captureRequested = false;
         const text = this._captureText + chunk.slice(i, end);
         let captured;
         try {
@@ -309,25 +313,25 @@ export default class JsonTokenizer {
       }
       if ((this._state & STATE_STRING) === STATE_STRING) {
         let end = i;
-        let isEscaped = this._isEscaped;
-        let needsParsing = this._stringNeedsParsing;
+        let isEscaped = (this._state & STATE_ESCAPED) === STATE_ESCAPED;
         for (; end < chunk.length; end++) {
           const code = chunk.charCodeAt(end);
           if (isEscaped) {
             isEscaped = false;
           } else if (code === BACKSLASH) {
             isEscaped = true;
-            needsParsing = true;
+            this._state = this._state | STATE_NEEDS_PARSING;
           } else if (code === QUOTE) {
             break;
           } else if (code < SPACE) {
             // Control characters must be escaped, so JSON.parse will
             // report this as an error
-            needsParsing = true;
+            this._state = this._state | STATE_NEEDS_PARSING;
           }
         }
-        this._isEscaped = isEscaped;
-        this._stringNeedsParsing = needsParsing;
+        this._state = isEscaped
+          ? this._state | STATE_ESCAPED
+          : this._state & ~STATE_ESCAPED;
         if (end === chunk.length) {
           // The string continues in the next chunk
           this._tokenText += chunk.slice(i);
@@ -371,11 +375,9 @@ export default class JsonTokenizer {
             this._unexpected(`token ${chunk[i]}`, position);
           }
           if (this._handlers.onOpen(code, position)) {
-            this._captureRequested = true;
+            this._state = STATE_CAPTURE_REQUESTED;
             this._capturePosition = position;
             this._captureDepth = 0;
-            this._captureInString = false;
-            this._captureIsEscaped = false;
           } else {
             this._openBrackets.push(code);
             this._state =
@@ -422,7 +424,6 @@ export default class JsonTokenizer {
           // Whether the string is allowed here is checked once it has ended,
           // when we know whether it's valid
           this._state = STATE_STRING | this._state;
-          this._stringNeedsParsing = false;
           // Consume the opening quote, so the string scanning above
           // doesn't treat it as the closing quote. Numbers and literals
           // are consumed by the scanning above.
@@ -450,7 +451,7 @@ export default class JsonTokenizer {
   end(): void {
     // If the input ended part way through a captured value, evaluate its
     // tokens to produce the error at the right position
-    if (this._captureRequested) {
+    if ((this._state & STATE_CAPTURE_REQUESTED) === STATE_CAPTURE_REQUESTED) {
       this._evaluateCapturedAsTokens(this._captureText);
     }
     if ((this._state & STATE_NUMBER) === STATE_NUMBER) {
