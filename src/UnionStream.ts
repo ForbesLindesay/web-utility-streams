@@ -25,14 +25,56 @@ export default class UnionStream<
     streams: T,
     queuingStrategy?: QueuingStrategy<UnionStreamEvent<T>>,
   ) {
-    const allReaders = streams.map((stream) => stream.getReader());
-    const activeReads = new Set<Promise<void>>();
-    let idleReaders = allReaders;
+    let controller!: ReadableStreamDefaultController<UnionStreamEvent<T>>;
     let isFinished = false;
+    // The number of reads that are waiting for a result
+    let activeReads = 0;
+
+    const onError = (err: unknown) => {
+      activeReads--;
+      if (isFinished) return;
+      isFinished = true;
+      controller.error(err);
+      cancelAll(err).catch(() => {
+        // Ignore errors here as the other streams may already have been
+        // cancelled or errored.
+      });
+    };
+
+    // The callbacks for each source's reads are created once, rather than for
+    // every read, as that has a noticeable cost.
+    interface Source {
+      readonly reader: ReadableStreamDefaultReader<UnionStreamEvent<T>>;
+      readonly onResult: (
+        result: ReadableStreamReadResult<UnionStreamEvent<T>>,
+      ) => void;
+    }
+    const sources = streams.map((stream): Source => {
+      const source: Source = {
+        reader: stream.getReader(),
+        onResult: (result) => {
+          activeReads--;
+          if (isFinished) return;
+          if (result.done) {
+            if (!idleSources.length && !activeReads) {
+              isFinished = true;
+              controller.close();
+            }
+          } else {
+            // This source is ready to be read again, the next time this
+            // stream is pulled
+            idleSources.push(source);
+            controller.enqueue(result.value);
+          }
+        },
+      };
+      return source;
+    });
+    let idleSources = sources;
 
     const cancelAll = async (reason: unknown) => {
       const results = await Promise.allSettled(
-        allReaders.map((reader) => reader.cancel(reason)),
+        sources.map((source) => source.reader.cancel(reason)),
       );
       for (const result of results) {
         if (result.status === "rejected") throw result.reason;
@@ -41,45 +83,22 @@ export default class UnionStream<
 
     super(
       {
-        start(controller) {
-          if (!allReaders.length) {
+        start(c) {
+          controller = c;
+          if (!sources.length) {
             isFinished = true;
             controller.close();
           }
         },
-        async pull(controller) {
-          const readers = idleReaders;
-          idleReaders = [];
-          for (const reader of readers) {
-            const read: Promise<void> = reader.read().then(
-              ({ done, value }) => {
-                activeReads.delete(read);
-                if (isFinished) return;
-                if (done) {
-                  if (!idleReaders.length && !activeReads.size) {
-                    isFinished = true;
-                    controller.close();
-                  }
-                } else {
-                  idleReaders.push(reader);
-                  controller.enqueue(value);
-                }
-              },
-              (err) => {
-                activeReads.delete(read);
-                if (isFinished) return;
-                isFinished = true;
-                controller.error(err);
-                cancelAll(err).catch(() => {
-                  // Ignore errors here as the other streams may already
-                  // have been cancelled or errored.
-                });
-              },
-            );
-            activeReads.add(read);
-          }
-          if (activeReads.size) {
-            await Promise.race(activeReads);
+        // Start reading from all the sources that aren't already being read.
+        // This doesn't wait for the reads to complete, as the stream calls
+        // `pull` again whenever a chunk is enqueued, if it wants more.
+        pull() {
+          const readers = idleSources;
+          idleSources = [];
+          for (const source of readers) {
+            activeReads++;
+            source.reader.read().then(source.onResult, onError);
           }
         },
         async cancel(reason) {

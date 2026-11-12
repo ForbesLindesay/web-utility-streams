@@ -12,10 +12,35 @@ const CITIES = ["London", "Paris", "Zürich", "São Paulo", "東京", "New York"
 const TAGS = ["alpha", "beta", "gamma", "delta"];
 
 /**
+ * The format of a data file: a JSON document, newline delimited JSON, or
+ * server-sent events (`text/event-stream`).
+ */
+export type DataFormat = "json" | "ndjson" | "sse";
+
+export interface DataRecord {
+  id: number;
+  name: string;
+  email: string;
+  active: boolean;
+  score: number;
+  tags: string[];
+  address: { street: string; city: string; zip: string };
+  bio: string;
+  manager: number | null;
+  createdAt: string;
+}
+
+export interface DataEvent {
+  type: string;
+  id: string;
+  data: string;
+}
+
+/**
  * A realistic-looking API record, including strings that need escaping and
  * non-ASCII characters.
  */
-export function record(i) {
+export function record(i: number): DataRecord {
   return {
     id: i,
     name: `User ${i}`,
@@ -25,7 +50,7 @@ export function record(i) {
     tags: TAGS.slice(0, i % 5),
     address: {
       street: `${i % 1000} Main St`,
-      city: CITIES[i % CITIES.length],
+      city: CITIES[i % CITIES.length]!,
       zip: String(10000 + (i % 90000)),
     },
     bio: `Says "hello" in ${i % 7} languages\nand likes emoji ✨`,
@@ -34,7 +59,7 @@ export function record(i) {
   };
 }
 
-export function* records(count) {
+export function* records(count: number): Generator<DataRecord> {
   for (let i = 0; i < count; i++) yield record(i);
 }
 
@@ -42,7 +67,7 @@ export function* records(count) {
  * A server-sent event, whose data is the JSON of `record(i)`. Every 10th event
  * has multi-line data.
  */
-export function event(i) {
+export function event(i: number): DataEvent {
   const value = record(i);
   return {
     type: "record",
@@ -51,7 +76,7 @@ export function event(i) {
   };
 }
 
-export function* events(count) {
+export function* events(count: number): Generator<DataEvent> {
   for (let i = 0; i < count; i++) yield event(i);
 }
 
@@ -59,7 +84,7 @@ export function* events(count) {
  * The text of `event(i)` in the `text/event-stream` format, with an
  * occasional comment and `retry` field, like a real server might send.
  */
-function eventText(i) {
+function eventText(i: number): string {
   const { type, id, data } = event(i);
   let text = "";
   if (i % 100 === 0) text += ": keep-alive\n";
@@ -80,18 +105,18 @@ const AVERAGE_RECORD_BYTES = (() => {
 /**
  * The number of records needed for roughly `bytes` of JSON
  */
-export function recordCountForBytes(bytes) {
+export function recordCountForBytes(bytes: number): number {
   return Math.floor(bytes / AVERAGE_RECORD_BYTES);
 }
 
 /**
  * The expected sum of the ids of `count` records, for checking results
  */
-export function expectedIdSum(count) {
+export function expectedIdSum(count: number): number {
   return (count * (count - 1)) / 2;
 }
 
-export function dataFile(format, sizeName) {
+export function dataFile(format: DataFormat, sizeName: string): string {
   return path.join(DATA_DIR, `${sizeName}.${format}`);
 }
 
@@ -101,11 +126,15 @@ export function dataFile(format, sizeName) {
  * Or, for "ndjson", one record per line, or for "sse", one event per record
  * in the `text/event-stream` format.
  */
-export async function writeDataFile(file, format, count) {
+export async function writeDataFile(
+  file: string,
+  format: DataFormat,
+  count: number,
+): Promise<void> {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const partial = `${file}.partial`;
   const out = fs.createWriteStream(partial);
-  const write = async (text) => {
+  const write = async (text: string) => {
     if (!out.write(text)) await once(out, "drain");
   };
   if (format === "json") {

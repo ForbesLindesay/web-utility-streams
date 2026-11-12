@@ -244,3 +244,46 @@ test("UnionStream - uses the size function of the queuing strategy", async () =>
   // Reads until the total size of the queued chunks reaches 5
   expect(a.pulled).toEqual(["a", "bb", "ccc"]);
 });
+
+for (const queuingStrategy of [
+  undefined,
+  { highWaterMark: 0 },
+  { highWaterMark: 5 },
+]) {
+  test(`UnionStream - emits every chunk from many sources with random timing, with ${JSON.stringify(queuingStrategy) ?? "the default queuing strategy"}`, async () => {
+    // A simple seeded random number generator, so failures can be reproduced
+    let seed = 42;
+    const random = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const sources = Array.from({ length: 20 }, (_, source) => {
+      const chunks: (string | Delay)[] = [];
+      const length = Math.floor(random() * 10);
+      for (let i = 0; i < length; i++) {
+        if (random() < 0.3) chunks.push(new Delay(Math.floor(random() * 5)));
+        chunks.push(`${source}:${i}`);
+      }
+      return { length, stream: readableStream(chunks) };
+    });
+    const results = await readableStreamResults(
+      new UnionStream(
+        sources.map((source) => source.stream),
+        queuingStrategy,
+      ),
+    );
+    const values = results.map((result) => {
+      if (!result.ok) throw new Error("The stream errored");
+      return result.value;
+    });
+    // Every chunk is emitted once, and the chunks from each source are in order
+    expect(values.length).toBe(
+      sources.reduce((total, source) => total + source.length, 0),
+    );
+    sources.forEach((source, index) => {
+      expect(values.filter((value) => value.startsWith(`${index}:`))).toEqual(
+        Array.from({ length: source.length }, (_, i) => `${index}:${i}`),
+      );
+    });
+  });
+}

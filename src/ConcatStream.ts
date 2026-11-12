@@ -41,34 +41,46 @@ export default class ConcatStream<
       }
     };
 
+    let controller!: ReadableStreamDefaultController<ConcatStreamEvent<T>>;
+
+    const onError = (err: unknown) => {
+      if (isFinished) return;
+      isFinished = true;
+      controller.error(err);
+      cancelRemainingReaders(err).catch(() => {
+        // Ignore errors here as the other streams may already have been
+        // cancelled or errored.
+      });
+    };
+    const onResult = (
+      result: ReadableStreamReadResult<ConcatStreamEvent<T>>,
+    ): Promise<void> | undefined => {
+      if (isFinished) return;
+      if (!result.done) {
+        controller.enqueue(result.value);
+        return;
+      }
+      // The current stream has closed, so move on to the next one
+      currentReader = remainingReaders.pop();
+      return readNext();
+    };
+    const readNext = (): Promise<void> | undefined => {
+      if (!currentReader) {
+        isFinished = true;
+        controller.close();
+        return;
+      }
+      return currentReader.read().then(onResult, onError);
+    };
+
     super(
       {
-        async pull(controller) {
-          while (currentReader) {
-            let result;
-            try {
-              result = await currentReader.read();
-            } catch (err) {
-              if (isFinished) return;
-              isFinished = true;
-              controller.error(err);
-              cancelRemainingReaders(err).catch(() => {
-                // Ignore errors here as the other streams may already
-                // have been cancelled or errored.
-              });
-              return;
-            }
-            if (isFinished) return;
-            if (!result.done) {
-              controller.enqueue(result.value);
-              return;
-            }
-            // The current stream has closed, so move on to the next one
-            currentReader = remainingReaders.pop();
-          }
-          isFinished = true;
-          controller.close();
+        start(c) {
+          controller = c;
         },
+        // Not an `async` function, as the extra promise it creates for every
+        // chunk has a noticeable cost
+        pull: readNext,
         async cancel(reason) {
           if (isFinished) return;
           isFinished = true;

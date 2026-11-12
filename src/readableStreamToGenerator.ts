@@ -36,21 +36,26 @@ export default function readableStreamToGenerator<TEvent>(
     }
   };
 
+  const onResult = (
+    result: ReadableStreamReadResult<TEvent>,
+  ): IteratorResult<TEvent, void> => {
+    if (result.done) {
+      finish();
+      return DONE_RESULT;
+    }
+    return result;
+  };
+  const onError = (err: unknown): never => {
+    finish();
+    throw err;
+  };
+
   return {
-    async next() {
-      if (finished) return DONE_RESULT;
-      let result;
-      try {
-        result = await reader.read();
-      } catch (err) {
-        finish();
-        throw err;
-      }
-      if (result.done) {
-        finish();
-        return DONE_RESULT;
-      }
-      return result;
+    // Not an `async` function, as the extra promise it creates for every
+    // chunk has a noticeable cost
+    next() {
+      if (finished) return Promise.resolve(DONE_RESULT);
+      return reader.read().then(onResult, onError);
     },
     async return() {
       await cancel();

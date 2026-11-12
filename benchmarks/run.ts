@@ -1,11 +1,10 @@
 // Runs the benchmarks and prints the results as Markdown tables.
 //
-// Usage: node benchmarks/run.mjs [options]
+// Usage: node benchmarks/run.ts [options]
 //
 //   --sizes        Input sizes (default: 10MB,256MB,2GB)
-//   --suites       decode-json, decode-ndjson, encode-json, encode-ndjson,
-//                  split-lines, decode-sse, encode-sse
-//                  (default: all)
+//   --suites       Which suites to run, e.g. decode-json,map (default: all,
+//                  one for each file in suites/)
 //   --libraries    Only run cases whose library name includes one of these
 //   --runs         Runs per measurement, the median is reported
 //                  (default: 5 for sizes up to 100MB, otherwise 1)
@@ -19,19 +18,61 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-import { suites } from "./cases.mjs";
-
-// Encoder output is only collected and checked for sizes up to this, as it
-// has to fit in a single string
-const MAX_VERIFIED_OUTPUT_BYTES = 256e6;
 import {
   dataFile,
   expectedIdSum,
   recordCountForBytes,
   writeDataFile,
-} from "./data.mjs";
+  type DataFormat,
+} from "./data.ts";
+import type {
+  BenchmarkCase,
+  CaseResult,
+  Suite,
+  WorkerResult,
+} from "./shared.ts";
+
+// Encoder output is only collected and checked for sizes up to this, as it
+// has to fit in a single string
+const MAX_VERIFIED_OUTPUT_BYTES = 256e6;
+
+interface Size {
+  /** The size as passed on the command line, e.g. "256MB" */
+  name: string;
+  bytes: number;
+}
+
+/**
+ * A row of the results table
+ */
+interface Row {
+  benchmark: BenchmarkCase;
+  maxRssBytes: number;
+  /** The median time, if every run succeeded */
+  time?: number;
+  /** The text for the "Time" column */
+  cell?: string;
+}
+
+// Each file in suites/ is a suite, named after the file
+const SUITES_DIR = path.join(import.meta.dirname, "suites");
+const suites: Record<string, Suite> = Object.fromEntries(
+  await Promise.all(
+    fs
+      .readdirSync(SUITES_DIR)
+      .filter((file) => file.endsWith(".ts"))
+      .map((file) => path.basename(file, ".ts"))
+      .sort()
+      .map(async (name) => {
+        const url = pathToFileURL(path.join(SUITES_DIR, `${name}.ts`));
+        const suite: Suite = (await import(url.href)).default;
+        return [name, suite];
+      }),
+  ),
+);
 
 const { values: options } = parseArgs({
   options: {
@@ -46,20 +87,21 @@ const { values: options } = parseArgs({
   },
 });
 
-const list = (value) =>
+const list = (value: string): string[] =>
   value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 
-function parseSize(text) {
+function parseSize(text: string): number {
   const match = /^(\d+(?:\.\d+)?)(KB|MB|GB)$/i.exec(text);
   if (!match) throw new Error(`Invalid size: ${text} (expected e.g. 10MB)`);
   const units = { KB: 1e3, MB: 1e6, GB: 1e9 };
-  return Math.round(Number(match[1]) * units[match[2].toUpperCase()]);
+  const unit = match[2]!.toUpperCase() as keyof typeof units;
+  return Math.round(Number(match[1]) * units[unit]);
 }
 
-const sizes = list(options.sizes).map((name) => ({
+const sizes = list(options.sizes).map((name): Size => ({
   name,
   bytes: parseSize(name),
 }));
@@ -74,29 +116,29 @@ if (!fs.existsSync(path.join(import.meta.dirname, "..", "lib"))) {
   process.exit(1);
 }
 
-const formatBytes = (bytes) =>
+const formatBytes = (bytes: number): string =>
   bytes >= 1e9
     ? `${(bytes / 1e9).toFixed(2)} GB`
     : `${(bytes / 1e6).toFixed(bytes >= 1e8 ? 0 : 1)} MB`;
-const formatTime = (ms) =>
+const formatTime = (ms: number): string =>
   ms >= 60_000
     ? `${(ms / 60_000).toFixed(1)} min`
     : ms >= 1000
       ? `${(ms / 1000).toFixed(2)} s`
       : `${ms.toFixed(0)} ms`;
-const median = (values) => {
+const median = (values: number[]): number => {
   const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  return sorted[Math.floor(sorted.length / 2)]!;
 };
 
 /**
  * Run one measurement in a fresh Node.js process
  */
-function runWorker(args) {
+function runWorker(args: string[]): Promise<WorkerResult> {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
-      [path.join(import.meta.dirname, "worker.mjs"), ...args],
+      [path.join(import.meta.dirname, "worker.ts"), ...args],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
@@ -112,7 +154,7 @@ function runWorker(args) {
             .split("\n")
             .find((line) => /Error|heap out of memory/.test(line)) ??
           `exited with code ${code}`;
-        resolve({ error: message.trim() });
+        resolve({ error: message.trim(), ms: 0, maxRssBytes: 0 });
       }
     });
   });
@@ -121,8 +163,17 @@ function runWorker(args) {
 /**
  * Check a result is correct, returning an error message if not
  */
-function check(result, suite, size) {
+function check(
+  result: CaseResult,
+  suite: Suite,
+  size: Size,
+  fileBytes: number | undefined,
+): string | undefined {
   if (result.error) return result.error;
+  // Consumers return the number of bytes they read, which must match the file
+  if (result.bytes !== undefined && result.bytes !== fileBytes) {
+    return `incorrect result: read ${result.bytes} bytes, expected ${fileBytes}`;
+  }
   const count = recordCountForBytes(size.bytes);
   if (result.count === undefined) {
     // Baselines, and encoders that aren't verifying their output
@@ -135,7 +186,7 @@ function check(result, suite, size) {
   }
 }
 
-async function ensureDataFile(format, size) {
+async function ensureDataFile(format: DataFormat, size: Size): Promise<void> {
   const file = dataFile(format, size.name);
   if (fs.existsSync(file)) return;
   process.stderr.write(`Generating ${file}... `);
@@ -165,7 +216,7 @@ print(
 );
 
 for (const suiteName of suiteNames) {
-  const suite = suites[suiteName];
+  const suite = suites[suiteName]!;
   print();
   print(`## ${suiteName}`);
   print();
@@ -173,12 +224,13 @@ for (const suiteName of suiteNames) {
 
   for (const size of sizes) {
     const runs = Number(options.runs ?? (size.bytes <= 100e6 ? 5 : 1));
-    if (!suite.encoder) await ensureDataFile(suite.format, size);
-    const fileBytes = suite.encoder
-      ? undefined
-      : fs.statSync(dataFile(suite.format, size.name)).size;
+    const format = suite.encoder || suite.generated ? undefined : suite.format;
+    if (format) await ensureDataFile(format, size);
+    const fileBytes = format
+      ? fs.statSync(dataFile(format, size.name)).size
+      : undefined;
 
-    const rows = [];
+    const rows: Row[] = [];
     for (const [index, benchmark] of suite.cases.entries()) {
       if (
         libraryFilter &&
@@ -187,16 +239,16 @@ for (const suiteName of suiteNames) {
       ) {
         continue;
       }
-      const row = { benchmark, maxRssBytes: 0 };
+      const row: Row = { benchmark, maxRssBytes: 0 };
       rows.push(row);
       if (benchmark.maxSize !== undefined && size.bytes > benchmark.maxSize) {
         row.cell = "n/a (too large for memory)";
         continue;
       }
       const label = `${suiteName} ${size.name}: ${benchmark.library} ${benchmark.name}`;
-      const times = [];
-      let error;
-      let outputBytes;
+      const times: number[] = [];
+      let error: string | undefined;
+      let outputBytes: number | undefined;
       if (
         suite.encoder &&
         benchmark.library !== "baseline" &&
@@ -213,7 +265,7 @@ for (const suiteName of suiteNames) {
           "verify",
         ]);
         error =
-          check(result, suite, size) ??
+          check(result, suite, size, fileBytes) ??
           (result.count === undefined ? "output was not checked" : undefined);
         process.stderr.write(error ? `FAILED: ${error}\n` : "OK\n");
         if (error) {
@@ -229,7 +281,7 @@ for (const suiteName of suiteNames) {
           String(size.bytes),
           size.name,
         ]);
-        error = check(result, suite, size);
+        error = check(result, suite, size, fileBytes);
         if (error) {
           process.stderr.write(`FAILED: ${error}\n`);
           break;
@@ -243,15 +295,18 @@ for (const suiteName of suiteNames) {
         row.cell = `failed: ${error}`;
         continue;
       }
-      row.time = median(times);
+      const time = median(times);
+      row.time = time;
       const bytes = suite.encoder ? outputBytes : fileBytes;
-      row.cell = bytes
-        ? `${formatTime(row.time)} (${((bytes / 1e6 / row.time) * 1000).toFixed(0)} MB/s)`
-        : formatTime(row.time);
+      row.cell = suite.generated
+        ? `${formatTime(time)} (${(recordCountForBytes(size.bytes) / 1e3 / time).toFixed(1)}M chunks/s)`
+        : bytes
+          ? `${formatTime(time)} (${((bytes / 1e6 / time) * 1000).toFixed(0)} MB/s)`
+          : formatTime(time);
     }
 
     // Fastest first, with baselines at the end
-    const isBaseline = (row) => row.benchmark.library === "baseline";
+    const isBaseline = (row: Row) => row.benchmark.library === "baseline";
     rows.sort(
       (a, b) =>
         Number(isBaseline(a)) - Number(isBaseline(b)) ||
@@ -259,16 +314,20 @@ for (const suiteName of suiteNames) {
     );
 
     print();
+    const count = recordCountForBytes(size.bytes).toLocaleString("en");
     print(
-      suite.encoder
-        ? `### ${size.name} (${recordCountForBytes(size.bytes).toLocaleString("en")} records)`
-        : `### ${size.name} (${formatBytes(fileBytes)}, ${recordCountForBytes(size.bytes).toLocaleString("en")} records)`,
+      suite.generated
+        ? `### ${size.name} (${count} chunks)`
+        : suite.encoder
+          ? `### ${size.name} (${count} records)`
+          : `### ${size.name} (${formatBytes(fileBytes ?? 0)}, ${count} records)`,
     );
     print();
     print("| Library | Approach | Time | Peak memory |");
     print("| --- | --- | --- | --- |");
     for (const row of rows) {
-      const bold = (text) => (row.benchmark.ours ? `**${text}**` : text);
+      const bold = (text: string | undefined) =>
+        row.benchmark.ours ? `**${text}**` : text;
       print(
         `| ${bold(row.benchmark.library)} | ${bold(row.benchmark.name)} | ${bold(row.cell)} | ${row.maxRssBytes ? formatBytes(row.maxRssBytes) : ""} |`,
       );

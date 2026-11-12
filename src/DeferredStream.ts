@@ -14,22 +14,37 @@
 export default class DeferredStream<T> extends ReadableStream<T> {
   constructor(stream: PromiseLike<ReadableStream<T>>) {
     let isCancelled = false;
-    const readerPromise = Promise.resolve(stream).then((stream) =>
-      stream.getReader(),
+    let controller!: ReadableStreamDefaultController<T>;
+    // Set once the promise resolves, so we don't need to wait for the
+    // promise for every chunk
+    let reader: ReadableStreamDefaultReader<T> | undefined;
+    const readerPromise = Promise.resolve(stream).then(
+      (stream) => (reader = stream.getReader()),
     );
     // If this stream is never read or cancelled, nothing else handles the
     // rejection, and we don't want that to crash the application.
     readerPromise.catch(() => {});
 
+    const onResult = (result: ReadableStreamReadResult<T>) => {
+      if (isCancelled) return;
+      if (result.done) controller.close();
+      else controller.enqueue(result.value);
+    };
+
     super(
       {
-        async pull(controller) {
-          const reader = await readerPromise;
-          if (isCancelled) return;
-          const { done, value } = await reader.read();
-          if (isCancelled) return;
-          if (done) controller.close();
-          else controller.enqueue(value);
+        start(c) {
+          controller = c;
+        },
+        // If the promise rejects or the read fails, the returned promise
+        // rejects, which errors this stream. Not an `async` function, as the
+        // extra promise it creates for every chunk has a noticeable cost.
+        pull() {
+          if (reader) return reader.read().then(onResult);
+          return readerPromise.then((reader) => {
+            if (isCancelled) return;
+            return reader.read().then(onResult);
+          });
         },
         async cancel(reason) {
           isCancelled = true;

@@ -95,6 +95,10 @@
     "@microsoft/fetch-event-source": "^2.0.1",
     "@streamparser/json": "^0.0.26",
     "@streamparser/json-whatwg": "^0.0.26",
+    "@types/jsonstream": "^0.8.33",
+    "@types/ndjson": "^2.0.4",
+    "@types/node": "^24.19.2",
+    "@types/split2": "^4.2.3",
     "bfj": "^9.1.4",
     "eventsource-encoder": "^1.0.2",
     "eventsource-parser": "^4.1.3",
@@ -111,10 +115,11 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
+    "typecheck:bench": "npm run build && tsc --noEmit -p benchmarks",
     "test": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "bench": "npm run build && node benchmarks/run.mjs"
+    "bench": "npm run build && node benchmarks/run.ts"
   },
   "repository": {
     "type": "git",

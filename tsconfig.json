@@ -17,9 +17,12 @@
     "isolatedDeclarations": true,
     "declaration": true,
     "lib": ["ES2025", "DOM", "ESNext.Disposable"],
+    // Don't load any @types packages (e.g. @types/node, which the benchmarks
+    // use), so the library can't accidentally rely on Node.js APIs
+    "types": [],
 
     "module": "NodeNext",
     "noEmit": true
   },
-  "exclude": ["./lib/**/*", "./vitest.config.ts", "./tsdown.config.ts"]
+  "include": ["src"]
 }

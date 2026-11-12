@@ -18,19 +18,36 @@ export default class LazyStream<T> extends ReadableStream<T> {
     getStream: () => ReadableStream<T> | PromiseLike<ReadableStream<T>>,
   ) {
     let isCancelled = false;
+    let controller!: ReadableStreamDefaultController<T>;
     let readerPromise: Promise<ReadableStreamDefaultReader<T>> | undefined;
+    // Set once the stream is available, so we don't need to wait for the
+    // promise for every chunk
+    let reader: ReadableStreamDefaultReader<T> | undefined;
+
+    const onResult = (result: ReadableStreamReadResult<T>) => {
+      if (isCancelled) return;
+      if (result.done) controller.close();
+      else controller.enqueue(result.value);
+    };
+
     super(
       {
-        async pull(controller) {
-          readerPromise ??= Promise.resolve(getStream()).then((stream) =>
-            stream.getReader(),
+        start(c) {
+          controller = c;
+        },
+        // If `getStream` throws, its promise rejects or the read fails, the
+        // returned promise rejects, which errors this stream. Not an `async`
+        // function, as the extra promise it creates for every chunk has a
+        // noticeable cost.
+        pull() {
+          if (reader) return reader.read().then(onResult);
+          readerPromise ??= Promise.resolve(getStream()).then(
+            (stream) => (reader = stream.getReader()),
           );
-          const reader = await readerPromise;
-          if (isCancelled) return;
-          const { done, value } = await reader.read();
-          if (isCancelled) return;
-          if (done) controller.close();
-          else controller.enqueue(value);
+          return readerPromise.then((reader) => {
+            if (isCancelled) return;
+            return reader.read().then(onResult);
+          });
         },
         async cancel(reason) {
           isCancelled = true;

@@ -1,0 +1,25 @@
+{
+  // The benchmarks are run directly by Node.js, which strips the types, so
+  // this config is only used for type checking (`npm run typecheck:bench`).
+  // Like the benchmarks themselves, it uses the built library in `lib/`, so
+  // the library must be built first.
+  "compilerOptions": {
+    "target": "es2025",
+    "lib": ["ES2025", "ESNext.Disposable"],
+    // Unlike the library, the benchmarks can use Node.js APIs
+    "types": ["node"],
+    "module": "NodeNext",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    // Only allow TypeScript syntax that Node.js can strip
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true
+  },
+  "include": ["."]
+}
