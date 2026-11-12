@@ -115,28 +115,14 @@ function countEvents(stream, sources = [], getRecord = (v) => v) {
  * A web ReadableStream of `count` generated server-sent events
  */
 function webEvents(count) {
-  const iterator = events(count);
-  return new ReadableStream({
-    pull(controller) {
-      const { done, value } = iterator.next();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-  });
+  return ReadableStream.from(events(count));
 }
 
 /**
  * A web ReadableStream of `count` generated records
  */
 function webRecords(count) {
-  const iterator = records(count);
-  return new ReadableStream({
-    pull(controller) {
-      const { done, value } = iterator.next();
-      if (done) controller.close();
-      else controller.enqueue(value);
-    },
-  });
+  return ReadableStream.from(records(count));
 }
 
 /**

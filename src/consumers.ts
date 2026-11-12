@@ -18,7 +18,9 @@ export type ConsumableStream =
  * Read the entire stream, and decode its contents as UTF-8 text. A leading
  * byte order mark is removed. Rejects if the stream errors.
  */
-export async function text(stream: ConsumableStream): Promise<string> {
+export async function textFromStream(
+  stream: ConsumableStream,
+): Promise<string> {
   const decoder = new TextDecoder();
   let result = "";
   for await (const chunk of stream) {
@@ -35,15 +37,19 @@ export async function text(stream: ConsumableStream): Promise<string> {
  * Read the entire stream, decode its contents as UTF-8 text, and parse it as
  * JSON. Rejects if the stream errors or the text is not valid JSON.
  */
-export async function json(stream: ConsumableStream): Promise<unknown> {
-  return JSON.parse(await text(stream));
+export async function jsonFromStream(
+  stream: ConsumableStream,
+): Promise<unknown> {
+  return JSON.parse(await textFromStream(stream));
 }
 
 /**
  * Read the entire stream into a single `Uint8Array`. String chunks are UTF-8
  * encoded. Rejects if the stream errors.
  */
-export async function bytes(stream: ConsumableStream): Promise<Uint8Array> {
+export async function bytesFromStream(
+  stream: ConsumableStream,
+): Promise<Uint8Array> {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
   let length = 0;

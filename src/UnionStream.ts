@@ -11,11 +11,20 @@ export type UnionStreamEvent<T extends readonly ReadableStream[]> =
  * The output closes once all source streams have closed. If any source stream
  * errors, the output is errored and all other source streams are cancelled.
  * If the output is cancelled, all source streams are cancelled.
+ *
+ * The optional `queuingStrategy` controls how far ahead of the reader the
+ * source streams are read. By default, one chunk is read ahead. With
+ * `{ highWaterMark: 0 }`, the sources are only read when the output is read.
+ * Because the sources are read in parallel, the output can buffer one more
+ * chunk per source than the high water mark allows.
  */
 export default class UnionStream<
   const T extends readonly ReadableStream[],
 > extends ReadableStream<UnionStreamEvent<T>> {
-  constructor(...streams: T) {
+  constructor(
+    streams: T,
+    queuingStrategy?: QueuingStrategy<UnionStreamEvent<T>>,
+  ) {
     const allReaders = streams.map((stream) => stream.getReader());
     const activeReads = new Set<Promise<void>>();
     let idleReaders = allReaders;
@@ -30,53 +39,56 @@ export default class UnionStream<
       }
     };
 
-    super({
-      start(controller) {
-        if (!allReaders.length) {
-          isFinished = true;
-          controller.close();
-        }
-      },
-      async pull(controller) {
-        const readers = idleReaders;
-        idleReaders = [];
-        for (const reader of readers) {
-          const read: Promise<void> = reader.read().then(
-            ({ done, value }) => {
-              activeReads.delete(read);
-              if (isFinished) return;
-              if (done) {
-                if (!idleReaders.length && !activeReads.size) {
-                  isFinished = true;
-                  controller.close();
+    super(
+      {
+        start(controller) {
+          if (!allReaders.length) {
+            isFinished = true;
+            controller.close();
+          }
+        },
+        async pull(controller) {
+          const readers = idleReaders;
+          idleReaders = [];
+          for (const reader of readers) {
+            const read: Promise<void> = reader.read().then(
+              ({ done, value }) => {
+                activeReads.delete(read);
+                if (isFinished) return;
+                if (done) {
+                  if (!idleReaders.length && !activeReads.size) {
+                    isFinished = true;
+                    controller.close();
+                  }
+                } else {
+                  idleReaders.push(reader);
+                  controller.enqueue(value);
                 }
-              } else {
-                idleReaders.push(reader);
-                controller.enqueue(value);
-              }
-            },
-            (err) => {
-              activeReads.delete(read);
-              if (isFinished) return;
-              isFinished = true;
-              controller.error(err);
-              cancelAll(err).catch(() => {
-                // Ignore errors here as the other streams may already
-                // have been cancelled or errored.
-              });
-            },
-          );
-          activeReads.add(read);
-        }
-        if (activeReads.size) {
-          await Promise.race(activeReads);
-        }
+              },
+              (err) => {
+                activeReads.delete(read);
+                if (isFinished) return;
+                isFinished = true;
+                controller.error(err);
+                cancelAll(err).catch(() => {
+                  // Ignore errors here as the other streams may already
+                  // have been cancelled or errored.
+                });
+              },
+            );
+            activeReads.add(read);
+          }
+          if (activeReads.size) {
+            await Promise.race(activeReads);
+          }
+        },
+        async cancel(reason) {
+          if (isFinished) return;
+          isFinished = true;
+          await cancelAll(reason);
+        },
       },
-      async cancel(reason) {
-        if (isFinished) return;
-        isFinished = true;
-        await cancelAll(reason);
-      },
-    });
+      queuingStrategy,
+    );
   }
 }

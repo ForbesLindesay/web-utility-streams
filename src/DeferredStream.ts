@@ -24,9 +24,8 @@ export default class DeferredStream<T> extends ReadableStream<T> {
     super(
       {
         async pull(controller) {
-          // If either of these throw, the returned promise rejects, which
-          // errors this stream.
           const reader = await readerPromise;
+          if (isCancelled) return;
           const { done, value } = await reader.read();
           if (isCancelled) return;
           if (done) controller.close();

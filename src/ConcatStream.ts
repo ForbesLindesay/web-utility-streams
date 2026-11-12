@@ -14,11 +14,18 @@ export type ConcatStreamEvent<T extends readonly ReadableStream[]> =
  * The output closes once the last source stream has closed. If any source
  * stream errors, the output is errored and all other source streams are
  * cancelled. If the output is cancelled, all source streams are cancelled.
+ *
+ * The optional `queuingStrategy` controls how far ahead of the reader the
+ * source streams are read. By default, one chunk is read ahead. With
+ * `{ highWaterMark: 0 }`, the sources are only read when the output is read.
  */
 export default class ConcatStream<
   const T extends readonly ReadableStream[],
 > extends ReadableStream<ConcatStreamEvent<T>> {
-  constructor(...streams: T) {
+  constructor(
+    streams: T,
+    queuingStrategy?: QueuingStrategy<ConcatStreamEvent<T>>,
+  ) {
     const remainingReaders = streams
       .map((stream) => stream.getReader())
       .reverse();
@@ -34,39 +41,42 @@ export default class ConcatStream<
       }
     };
 
-    super({
-      async pull(controller) {
-        while (currentReader) {
-          let result;
-          try {
-            result = await currentReader.read();
-          } catch (err) {
+    super(
+      {
+        async pull(controller) {
+          while (currentReader) {
+            let result;
+            try {
+              result = await currentReader.read();
+            } catch (err) {
+              if (isFinished) return;
+              isFinished = true;
+              controller.error(err);
+              cancelRemainingReaders(err).catch(() => {
+                // Ignore errors here as the other streams may already
+                // have been cancelled or errored.
+              });
+              return;
+            }
             if (isFinished) return;
-            isFinished = true;
-            controller.error(err);
-            cancelRemainingReaders(err).catch(() => {
-              // Ignore errors here as the other streams may already
-              // have been cancelled or errored.
-            });
-            return;
+            if (!result.done) {
+              controller.enqueue(result.value);
+              return;
+            }
+            // The current stream has closed, so move on to the next one
+            currentReader = remainingReaders.pop();
           }
+          isFinished = true;
+          controller.close();
+        },
+        async cancel(reason) {
           if (isFinished) return;
-          if (!result.done) {
-            controller.enqueue(result.value);
-            return;
-          }
-          // The current stream has closed, so move on to the next one
-          currentReader = remainingReaders.pop();
-        }
-        isFinished = true;
-        controller.close();
+          isFinished = true;
+          if (currentReader) remainingReaders.push(currentReader);
+          await cancelRemainingReaders(reason);
+        },
       },
-      async cancel(reason) {
-        if (isFinished) return;
-        isFinished = true;
-        if (currentReader) remainingReaders.push(currentReader);
-        await cancelRemainingReaders(reason);
-      },
-    });
+      queuingStrategy,
+    );
   }
 }

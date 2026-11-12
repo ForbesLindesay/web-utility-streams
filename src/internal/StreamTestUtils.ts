@@ -256,3 +256,33 @@ export function testTransformRobustness(c: TransformCase): void {
     }
   });
 }
+
+export interface CountingSource<T> {
+  stream: ReadableStream<T>;
+  /** The chunks that have been read from the stream so far */
+  pulled: T[];
+}
+/**
+ * A source stream that only produces each chunk when it is pulled (it has no
+ * buffer of its own), and records which chunks have been pulled. This lets
+ * tests check how far ahead a stream reads from its sources.
+ */
+export function countingSource<T>(chunks: T[]): CountingSource<T> {
+  const pulled: T[] = [];
+  let index = 0;
+  const stream = new ReadableStream<T>(
+    {
+      pull(controller) {
+        if (index >= chunks.length) {
+          controller.close();
+          return;
+        }
+        const chunk = chunks[index++]!;
+        pulled.push(chunk);
+        controller.enqueue(chunk);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { stream, pulled };
+}
