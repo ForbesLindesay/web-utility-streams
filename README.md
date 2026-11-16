@@ -6,6 +6,8 @@ Various utility streams that are very useful for working with web streams.
 
 **Transform streams**
 
+- [`AddPrefixStream`](#addprefixstream) - Emit some chunks before the rest of the stream.
+- [`DebounceStream`](#debouncestream) - Emit at most one chunk per period, dropping the rest.
 - [`DebugStream`](#debugstream) - Call a function with each chunk as it passes through.
 - [`EventSourceDecoderStream`](#eventsourcedecoderstream) - Decode `text/event-stream` (Server-Sent Events) text into events.
 - [`EventSourceEncoderStream`](#eventsourceencoderstream) - Encode events as `text/event-stream` (Server-Sent Events) text.
@@ -52,6 +54,40 @@ try {
 ```
 
 ## Transform streams
+
+### AddPrefixStream
+
+Emit the chunks of a prefix, then pass every chunk written to the stream through unchanged. The prefix can be an array (or any other iterable), an async iterable (such as an async generator, or a `ReadableStream`), or a promise for one of these.
+
+```ts
+import AddPrefixStream from "web-utility-streams/AddPrefixStream";
+
+const events = updates.pipeThrough(
+  new AddPrefixStream(getCurrentState().then((state) => [state])),
+);
+```
+
+The prefix is read one chunk at a time, as the output is read, so backpressure is preserved. Chunks written to the stream wait until the whole prefix has been emitted. After that, up to 4 chunks are read ahead of the output, which makes passing them through much faster. If the promise rejects, or the prefix throws while it is being read, the stream is errored. If the writable side is aborted (for example because the source of a pipeline errored), the output is errored straight away, even if the prefix hasn't finished. If the output is cancelled, or the stream errors, before the prefix has finished, the prefix's iterator is closed (by calling its `return` method), so the `finally` blocks of a generator run.
+
+### DebounceStream
+
+Emit at most one chunk every `debounceMs` milliseconds, dropping the rest. This is useful for things like progress updates, where only the latest value matters, and the consumer shouldn't be overwhelmed.
+
+```ts
+import DebounceStream from "web-utility-streams/DebounceStream";
+
+const progress = progressEvents.pipeThrough(
+  new DebounceStream({ debounceMs: 100 }),
+);
+```
+
+When a chunk is written and nothing has been emitted in the last `debounceMs`, a period starts. The `mode` option controls which chunks are emitted:
+
+- `"BOTH"` (the default): emit the first chunk straight away, and then the most recent chunk at the end of the period, if there was another.
+- `"LEADING"`: emit the first chunk straight away, and drop the rest of the chunks in the period.
+- `"TRAILING"`: emit the most recent chunk at the end of the period.
+
+Emitting a chunk at the end of a period starts a new period, so emitted chunks are always at least `debounceMs` apart. When the input closes, a chunk waiting for the end of the period is emitted straight away. Writes never wait for the output to be read, so the source isn't slowed down. If the output isn't read before the next chunk is emitted, only the most recent one is kept.
 
 ### DebugStream
 

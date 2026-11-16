@@ -37,7 +37,7 @@ The benchmarks are written in TypeScript, and run directly by Node.js, which str
 
 ## What's measured
 
-There are 22 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
+There are 24 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
 
 - **decode-json:** decode the elements of the `results` array in a file shaped like a paginated API response: `{"total":N,"page":1,"results":[...],"next":null}`, with one record per line.
 - **decode-ndjson:** decode a file with one JSON record per line.
@@ -54,7 +54,9 @@ The rest measure the overhead each general purpose stream adds per chunk. Their 
 - **map:** `MapStream`, with a sync and an async function.
 - **filter:** `FilterStream`, removing a "noise" chunk that follows every `{ id }`.
 - **filter-map:** `FilterMapStream` on the same input, and `FilterStream` followed by `MapStream`.
+- **debounce:** `DebounceStream` in each mode, with a period much longer than the run, so only the first and last chunks are emitted.
 - **debug:** `DebugStream`, with a function that counts the chunks.
+- **add-prefix:** `AddPrefixStream`, with a short prefix of 10 chunks (an array, or from a promise) and a long prefix of half the chunks (an array, or an async generator).
 - **transform-pipeline:** two `MapStream`s combined with `TransformPipelineStream`, compared with piping through them directly.
 - **concat** and **union:** `ConcatStream` and `UnionStream`, joining 10 sources.
 - **deferred** and **lazy:** `DeferredStream` and `LazyStream`, wrapping a single source.

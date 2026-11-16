@@ -4,6 +4,10 @@
   "description": "Various utility streams that are very useful for working with web streams.",
   "type": "module",
   "exports": {
+    "./AddPrefixStream": {
+      "types": "./lib/AddPrefixStream.d.mts",
+      "default": "./lib/AddPrefixStream.mjs"
+    },
     "./ConcatStream": {
       "types": "./lib/ConcatStream.d.mts",
       "default": "./lib/ConcatStream.mjs"
@@ -11,6 +15,10 @@
     "./consumers": {
       "types": "./lib/consumers.d.mts",
       "default": "./lib/consumers.mjs"
+    },
+    "./DebounceStream": {
+      "types": "./lib/DebounceStream.d.mts",
+      "default": "./lib/DebounceStream.mjs"
     },
     "./DebugStream": {
       "types": "./lib/DebugStream.d.mts",
