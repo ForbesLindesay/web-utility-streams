@@ -1,6 +1,6 @@
 {
   "name": "web-utility-streams",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Various utility streams that are very useful for working with web streams.",
   "type": "module",
   "exports": {
