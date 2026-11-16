@@ -8,8 +8,10 @@
 //   --libraries    Only run cases whose library name includes one of these
 //   --runs         Runs per measurement, the median is reported
 //                  (default: 5 for sizes up to 100MB, otherwise 1)
-//   --out          The Markdown file to write the results to, as they are
-//                  produced (default: benchmarks/RESULTS.md)
+//   --out-dir      The folder to write the results to, as they are produced,
+//                  with one Markdown file per suite, e.g. add-prefix.md
+//                  (default: benchmarks/results). Only the files for the
+//                  suites being run are replaced.
 //
 // The library must be built first (`npm run build`), as the benchmarks import
 // it from `lib/` via the package's exports.
@@ -80,9 +82,9 @@ const { values: options } = parseArgs({
     suites: { type: "string", default: Object.keys(suites).join(",") },
     libraries: { type: "string" },
     runs: { type: "string" },
-    out: {
+    "out-dir": {
       type: "string",
-      default: path.join(import.meta.dirname, "RESULTS.md"),
+      default: path.join(import.meta.dirname, "results"),
     },
   },
 });
@@ -197,30 +199,32 @@ async function ensureDataFile(format: DataFormat, size: Size): Promise<void> {
   );
 }
 
-// Write the results to the output file as they are produced, so a long run
-// can be followed (and partial results aren't lost if it is stopped).
-fs.writeFileSync(options.out, "");
-const print = (line = "") => {
-  console.log(line);
-  fs.appendFileSync(options.out, line + "\n");
-};
+// Each suite's results are written to their own file, so running one suite
+// doesn't replace the results of the others. The results are written as they
+// are produced, so a long run can be followed (and partial results aren't
+// lost if it is stopped).
+const outDir = options["out-dir"];
+fs.mkdirSync(outDir, { recursive: true });
 
-print("# Benchmark results");
-print();
-print(
+const environment = [
   `- Node.js ${process.version} on ${os.type()} ${os.arch()}, ${os.cpus()[0]?.model ?? "unknown CPU"}, ${Math.round(os.totalmem() / 2 ** 30)} GB RAM`,
-);
-print(`- Date: ${new Date().toISOString().slice(0, 10)}`);
-print(
+  `- Date: ${new Date().toISOString().slice(0, 10)}`,
   "- Times are the median of the runs, measured in a fresh process for each run. Throughput is input bytes (for decoders) or output characters (for encoders) per second. Peak memory is the peak resident set size of the process. Decoders that use web streams read the input with `FileHandle.readableWebStream()` (16KiB chunks), and decoders that use Node.js streams read it with `fs.createReadStream()` (64KiB chunks).",
-);
+];
 
 for (const suiteName of suiteNames) {
   const suite = suites[suiteName]!;
-  print();
-  print(`## ${suiteName}`);
+  const outFile = path.join(outDir, `${suiteName}.md`);
+  fs.writeFileSync(outFile, "");
+  const print = (line = "") => {
+    console.log(line);
+    fs.appendFileSync(outFile, line + "\n");
+  };
+  print(`# ${suiteName}`);
   print();
   print(suite.description + ".");
+  print();
+  for (const line of environment) print(line);
 
   for (const size of sizes) {
     const runs = Number(options.runs ?? (size.bytes <= 100e6 ? 5 : 1));
@@ -317,10 +321,10 @@ for (const suiteName of suiteNames) {
     const count = recordCountForBytes(size.bytes).toLocaleString("en");
     print(
       suite.generated
-        ? `### ${size.name} (${count} chunks)`
+        ? `## ${size.name} (${count} chunks)`
         : suite.encoder
-          ? `### ${size.name} (${count} records)`
-          : `### ${size.name} (${formatBytes(fileBytes ?? 0)}, ${count} records)`,
+          ? `## ${size.name} (${count} records)`
+          : `## ${size.name} (${formatBytes(fileBytes ?? 0)}, ${count} records)`,
     );
     print();
     print("| Library | Approach | Time | Peak memory |");
@@ -333,6 +337,5 @@ for (const suiteName of suiteNames) {
       );
     }
   }
+  console.error(`Results written to ${outFile}`);
 }
-
-console.error(`Results written to ${options.out}`);

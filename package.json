@@ -84,9 +84,17 @@
       "types": "./lib/SplitLinesStream.d.mts",
       "default": "./lib/SplitLinesStream.mjs"
     },
+    "./TimeoutStream": {
+      "types": "./lib/TimeoutStream.d.mts",
+      "default": "./lib/TimeoutStream.mjs"
+    },
     "./TransformPipelineStream": {
       "types": "./lib/TransformPipelineStream.d.mts",
       "default": "./lib/TransformPipelineStream.mjs"
+    },
+    "./TransformStreamWithCancel": {
+      "types": "./lib/TransformStreamWithCancel.d.mts",
+      "default": "./lib/TransformStreamWithCancel.mjs"
     },
     "./UnionStream": {
       "types": "./lib/UnionStream.d.mts",

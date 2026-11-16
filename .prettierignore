@@ -1,4 +1,4 @@
 lib/
 package-lock.json
 benchmarks/.data/
-benchmarks/RESULTS.md
+benchmarks/results/

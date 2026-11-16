@@ -20,7 +20,9 @@ Various utility streams that are very useful for working with web streams.
 - [`NewlineDelimitedJsonDecoderStream`](#newlinedelimitedjsondecoderstream) - Parse each line of NDJSON text into a value.
 - [`NewlineDelimitedJsonEncoderStream`](#newlinedelimitedjsonencoderstream) - Encode each value as a line of NDJSON.
 - [`SplitLinesStream`](#splitlinesstream) - Split text into lines.
+- [`TimeoutStream`](#timeoutstream) - Error the stream if no chunk arrives for too long.
 - [`TransformPipelineStream`](#transformpipelinestream) - Combine several transform streams into one.
+- [`TransformStreamWithCancel`](#transformstreamwithcancel) - A `TransformStream` that calls the transformer's `cancel` method, in any runtime.
 
 **Readable streams**
 
@@ -352,6 +354,55 @@ for await (const line of lines) {
 }
 ```
 
+### TimeoutStream
+
+Pass chunks through unchanged, but error the stream if no chunk is written for `timeoutMs` milliseconds. This is useful for detecting a connection that has stalled, such as a streaming API response that stops sending data without closing. When the timeout is reached, the stream is errored with a `TimeoutStreamError` (which has `code: "TIMEOUT_STREAM_TIMEOUT"`), so in a pipeline the source is cancelled and the error is thrown from `pipeTo`.
+
+```ts
+import TimeoutStream, {
+  TimeoutStreamError,
+} from "web-utility-streams/TimeoutStream";
+
+try {
+  await response
+    .body!.pipeThrough(new TimeoutStream({ timeoutMs: 30_000 }))
+    .pipeTo(destination);
+} catch (ex) {
+  if (ex instanceof TimeoutStreamError) {
+    // No data was received for 30 seconds
+  }
+}
+```
+
+The timeout starts when the stream is created, and is stopped when the input closes, or the stream is cancelled or errored.
+
+Chunks are only written to a `TimeoutStream` when its output has room for them (it reads one chunk ahead of the output), so if the output is read slowly, for example because the destination of a pipeline is slow, the input is held back by backpressure, and that can cause a timeout too. Choose a timeout that allows for the slowest reader you expect, or put the `TimeoutStream` before any slow steps in the pipeline.
+
+`timeoutMs` can also be a function, which is called to choose the first timeout (with `remainingMs` of `0` and no chunk), and then each time a chunk is written, with the time that was left of the previous timeout and the chunk. For example, when streaming audio to a player that reads it in real time, each chunk gives the input longer before the next one is needed:
+
+```ts
+await audioStream
+  .pipeThrough(
+    new TimeoutStream<AudioChunk>({
+      // Allow 5 seconds for the first chunk. After that, add the length of
+      // each chunk to the time that was left, as the player won't ask for
+      // more until it has played it.
+      timeoutMs: (remainingMs, chunk) =>
+        chunk === undefined ? 5_000 : remainingMs + getAudioDuration(chunk),
+    }),
+  )
+  .pipeTo(audioPlayer);
+```
+
+Pass `onTimeout` to choose what happens when the timeout is reached. It's called with the stream's `TransformStreamDefaultController`, so it can error the stream with your own error, end it cleanly with `controller.terminate()`, or enqueue a chunk. If it doesn't error or terminate the stream, the timeout starts again when the next chunk is written. If it throws, the stream is errored.
+
+```ts
+const stream = new TimeoutStream({
+  timeoutMs: 10_000,
+  onTimeout: (controller) => controller.error(new MyTimeoutError()),
+});
+```
+
 ### TransformPipelineStream
 
 Combine a series of transform streams into a single transform stream. The function you pass is given an `input` with a `pipeThrough` method, and must return the final readable stream.
@@ -377,6 +428,31 @@ class BytesToEventsStream extends TransformPipelineStream<
 
 const events = response.body!.pipeThrough(new BytesToEventsStream());
 ```
+
+### TransformStreamWithCancel
+
+`TransformStream`, with support for the transformer's `cancel` method in every runtime. `cancel` is called with the reason when the readable side is cancelled or the writable side is aborted (e.g. because another part of a pipeline errored), which makes it the place to clean up resources such as timers or connections. It was added to the Streams standard in 2023, but isn't supported everywhere yet.
+
+In runtimes that support `cancel` (such as Node.js), `TransformStreamWithCancel` is just `TransformStream`. Elsewhere it's `TransformStreamWithCancelPolyfill`, which implements the standard's `TransformStream` with a `ReadableStream` and a `WritableStream`. It supports everything `TransformStream` does, including queuing strategies and backpressure, but `instanceof TransformStream` is `false`.
+
+```ts
+import TransformStreamWithCancel from "web-utility-streams/TransformStreamWithCancel";
+
+const subscription = subscribe();
+const stream = new TransformStreamWithCancel<Message, Message>({
+  transform(message, controller) {
+    if (subscription.isWanted(message)) controller.enqueue(message);
+  },
+  flush() {
+    subscription.unsubscribe();
+  },
+  cancel(reason) {
+    subscription.unsubscribe();
+  },
+});
+```
+
+You can extend it like `TransformStream`, e.g. `class MyStream extends TransformStreamWithCancel<In, Out>`. The module also exports `supportsTransformerCancel`, which is `true` if the native `TransformStream` supports `cancel`, the `TransformStreamWithCancelPolyfill` class (if you want to use it regardless), and the `TransformerWithCancel` type (TypeScript's own `Transformer` type doesn't include `cancel` yet).
 
 ## Readable streams
 

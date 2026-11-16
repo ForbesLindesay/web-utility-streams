@@ -1,6 +1,6 @@
 # Benchmarks
 
-Benchmarks comparing every stream and utility in this package with popular libraries and built-in Node.js APIs that do the same jobs, where there are any. The latest results are in [RESULTS.md](RESULTS.md).
+Benchmarks comparing every stream and utility in this package with popular libraries and built-in Node.js APIs that do the same jobs, where there are any. The latest results are in [results/](results/), with one file per suite (for example [results/decode-json.md](results/decode-json.md)).
 
 ## Running the benchmarks
 
@@ -8,7 +8,7 @@ Benchmarks comparing every stream and utility in this package with popular libra
 npm run bench
 ```
 
-This builds the library, generates the input data (if it doesn't already exist) and runs every benchmark at 10MB, 256MB and 2GB. The results are written to [RESULTS.md](RESULTS.md) as each table is completed, as well as being printed. A full run takes roughly 20 minutes on a fast machine, and the generated data needs about 7GB of disk space, in `benchmarks/.data/` (which is ignored by git). You can choose what to run with these options:
+This builds the library, generates the input data (if it doesn't already exist) and runs every benchmark at 10MB, 256MB and 2GB. The results are written to [results/](results/) as each table is completed, as well as being printed. Each suite has its own file, named after the suite (e.g. `results/concat.md`), and only the files for the suites that are run are replaced, so you can re-run one suite without losing the results of the others. A full run takes roughly 20 minutes on a fast machine, and the generated data needs about 7GB of disk space, in `benchmarks/.data/` (which is ignored by git). You can choose what to run with these options:
 
 ```bash
 npm run bench -- --sizes 10MB --suites decode-json --libraries web-utility-streams,stream-json
@@ -20,7 +20,7 @@ npm run bench -- --sizes 10MB --suites decode-json --libraries web-utility-strea
 | `--suites`    | Which suites to run.                                                           | all                                  |
 | `--libraries` | Only run cases whose library name includes one of these. Baselines always run. | all                                  |
 | `--runs`      | Runs per measurement. The median is reported.                                  | 5 for sizes up to 100MB, otherwise 1 |
-| `--out`       | The Markdown file to write the results to.                                     | `benchmarks/RESULTS.md`              |
+| `--out-dir`   | The folder to write the results to, with one Markdown file per suite.          | `benchmarks/results`                 |
 
 ## How the code is organised
 
@@ -37,7 +37,7 @@ The benchmarks are written in TypeScript, and run directly by Node.js, which str
 
 ## What's measured
 
-There are 24 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
+There are 26 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
 
 - **decode-json:** decode the elements of the `results` array in a file shaped like a paginated API response: `{"total":N,"page":1,"results":[...],"next":null}`, with one record per line.
 - **decode-ndjson:** decode a file with one JSON record per line.
@@ -56,6 +56,8 @@ The rest measure the overhead each general purpose stream adds per chunk. Their 
 - **filter-map:** `FilterMapStream` on the same input, and `FilterStream` followed by `MapStream`.
 - **debounce:** `DebounceStream` in each mode, with a period much longer than the run, so only the first and last chunks are emitted.
 - **debug:** `DebugStream`, with a function that counts the chunks.
+- **timeout:** `TimeoutStream`, with a fixed timeout and a timeout chosen by a function, with a timeout much longer than the run, compared with restarting a `setTimeout` in a `TransformStream` for each chunk.
+- **transform-with-cancel:** `TransformStreamWithCancelPolyfill` with a sync and an async transform that passes chunks through unchanged, compared with the native `TransformStream` (which `TransformStreamWithCancel` is, in Node.js).
 - **add-prefix:** `AddPrefixStream`, with a short prefix of 10 chunks (an array, or from a promise) and a long prefix of half the chunks (an array, or an async generator).
 - **transform-pipeline:** two `MapStream`s combined with `TransformPipelineStream`, compared with piping through them directly.
 - **concat** and **union:** `ConcatStream` and `UnionStream`, joining 10 sources.
