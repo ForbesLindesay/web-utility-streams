@@ -5,7 +5,7 @@ on:
     types: [rollingversions_publish_approved]
   push:
     branches:
-      - master
+      - main
 
 permissions:
   id-token: write # Required for OIDC to publish to NPM
@@ -20,8 +20,8 @@ jobs:
       - uses: actions/setup-node@v1
         with:
           node-version: 24.x
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm install --frozen-lockfile
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install
       - run: npm run build
       - run: npx rollingversions publish --canary $GITHUB_RUN_NUMBER --allow-any-branch
         env:
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-node@v1
         with:
           node-version: ${{ matrix.node-version }}
-      - run: npm install --frozen-lockfile
+      - run: npm install
       - run: npm run typecheck
       - run: npm run test
 
@@ -52,8 +52,8 @@ jobs:
       - uses: actions/setup-node@v1
         with:
           node-version: 24.x
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm install --frozen-lockfile
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install
       - run: npm run build
       - run: npx rollingversions publish
         env:
