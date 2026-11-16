@@ -1,18 +1,16 @@
 export interface DebounceStreamOptions {
   debounceMs: number;
   /**
-   * - `"LEADING"`: emit the first chunk straight away, then ignore chunks for
-   *   `debounceMs`.
-   * - `"TRAILING"`: wait `debounceMs` after the first chunk, then emit the
-   *   most recent chunk.
-   * - `"BOTH"` (the default): emit the first chunk straight away, and then
-   *   the most recent chunk at the end of the period, if there was another.
+   * Which chunks of each period to emit:
+   * - `"BOTH"` (the default): the first chunk straight away, and the most
+   *   recent chunk at the end of the period, if there was another.
+   * - `"LEADING"`: only the first chunk, straight away.
+   * - `"TRAILING"`: only the most recent chunk, at the end of the period.
    */
   mode?: "LEADING" | "TRAILING" | "BOTH";
   /**
-   * Restart the timer on each chunk. When paired with "TRAILING", this ensures
-   * that a chunk is only emitted when no different values have been received
-   * for at least debounceMs.
+   * Extend the period each time a chunk is written, so it only ends once no
+   * chunks have been written for `debounceMs`.
    *
    * @default false
    */
@@ -20,19 +18,14 @@ export interface DebounceStreamOptions {
 }
 
 /**
- * Emit at most one event every `debounceMs` milliseconds, dropping the rest.
+ * Emit at most one chunk every `debounceMs` milliseconds, dropping the rest.
  *
- * - When a chunk is written and nothing has been emitted in the last
- *   `debounceMs`, a period starts. In `"LEADING"` and `"BOTH"` modes, the
- *   chunk is emitted straight away.
- * - Chunks written during the period are dropped, except that in
- *   `"TRAILING"` and `"BOTH"` modes, the most recent one is emitted at the
- *   end of the period, which starts a new period.
- * - When the writable side is closed, a chunk waiting for the end of the
- *   period is emitted straight away, and then the output closes.
- * - Writes never wait for the output to be read, so the source is never
- *   slowed down. If the output isn't read before the next chunk is emitted,
- *   only the most recent one is kept.
+ * - A period starts when a chunk is written and nothing has been emitted in
+ *   the last `debounceMs`. Emitting a trailing chunk starts a new period.
+ * - When the writable side closes, a trailing chunk that is waiting is
+ *   emitted straight away.
+ * - Writes never wait for the output to be read. If the output isn't read
+ *   before the next chunk is emitted, only the most recent one is kept.
  */
 export default class DebounceStream<TChunk> implements TransformStream<
   TChunk,
@@ -61,10 +54,13 @@ export default class DebounceStream<TChunk> implements TransformStream<
 
     let readableController!: ReadableStreamDefaultController<TChunk>;
     let writableController!: WritableStreamDefaultController;
-    let isFinished = false;
 
     // Set while a period is in progress
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // With `restartTimerOnChunk`, when the period ends. Restarting the timer
+    // on every chunk is slow, so instead the timer is restarted when it fires
+    // if the period has been extended.
+    let periodEnd = 0;
     // The most recent chunk written during the period, to emit at the end
     let hasTrailing = false;
     let trailingChunk: TChunk | undefined;
@@ -86,24 +82,26 @@ export default class DebounceStream<TChunk> implements TransformStream<
       }
     };
 
+    const startPeriod = () => {
+      if (restartTimerOnChunk) periodEnd = performance.now() + debounceMs;
+      timer = setTimeout(endPeriod, debounceMs);
+    };
+
     const endPeriod = () => {
+      if (restartTimerOnChunk) {
+        const remaining = periodEnd - performance.now();
+        if (remaining > 0) {
+          timer = setTimeout(endPeriod, remaining);
+          return;
+        }
+      }
       timer = undefined;
       if (!hasTrailing) return;
       const chunk = trailingChunk!;
       hasTrailing = false;
       trailingChunk = undefined;
       emit(chunk);
-      timer = setTimeout(endPeriod, debounceMs);
-    };
-
-    const finish = () => {
-      isFinished = true;
-      clearTimeout(timer);
-      timer = undefined;
-      hasTrailing = false;
-      trailingChunk = undefined;
-      hasOutput = false;
-      outputChunk = undefined;
+      startPeriod();
     };
 
     this.readable = new ReadableStream<TChunk>(
@@ -122,8 +120,7 @@ export default class DebounceStream<TChunk> implements TransformStream<
           }
         },
         cancel(reason) {
-          if (isFinished) return;
-          finish();
+          clearTimeout(timer);
           // Error the writable side, so the source of a pipeline is cancelled
           writableController.error(reason);
         },
@@ -138,38 +135,25 @@ export default class DebounceStream<TChunk> implements TransformStream<
         writableController = c;
       },
       write(chunk) {
-        if (isFinished) return;
-        if (timer !== undefined) {
-          if (restartTimerOnChunk) {
-            clearTimeout(timer);
-            timer = setTimeout(endPeriod, debounceMs);
-          }
-          if (trailing) {
-            hasTrailing = true;
-            trailingChunk = chunk;
-          }
-          return;
+        if (timer === undefined) {
+          startPeriod();
+          if (leading) return emit(chunk);
+        } else if (restartTimerOnChunk) {
+          periodEnd = performance.now() + debounceMs;
         }
-        if (leading) {
-          emit(chunk);
-        } else {
+        if (trailing) {
           hasTrailing = true;
           trailingChunk = chunk;
         }
-        timer = setTimeout(endPeriod, debounceMs);
       },
       close() {
-        if (isFinished) return;
         if (hasTrailing) emit(trailingChunk!);
-        const hasUnreadOutput = hasOutput;
-        const chunk = outputChunk!;
-        finish();
-        if (hasUnreadOutput) readableController.enqueue(chunk);
+        if (hasOutput) readableController.enqueue(outputChunk!);
+        clearTimeout(timer);
         readableController.close();
       },
       abort(reason) {
-        if (isFinished) return;
-        finish();
+        clearTimeout(timer);
         readableController.error(reason);
       },
     });

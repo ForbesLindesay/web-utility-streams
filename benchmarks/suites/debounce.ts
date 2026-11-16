@@ -35,14 +35,21 @@ async function checkDebounced(
   return { ignored: ids.length };
 }
 
-const ours = (mode: NonNullable<DebounceStreamOptions["mode"]>) => ({
+const ours = (
+  mode: NonNullable<DebounceStreamOptions["mode"]>,
+  restartTimerOnChunk = false,
+) => ({
   library: OURS,
-  name: `DebounceStream (${mode})`,
+  name: `DebounceStream (${mode}${restartTimerOnChunk ? ", restartTimerOnChunk" : ""})`,
   ours: true,
   run: ({ count }: { count: number }) =>
     checkDebounced(
       idStream(count).pipeThrough(
-        new DebounceStream<IdChunk>({ debounceMs: DEBOUNCE_MS, mode }),
+        new DebounceStream<IdChunk>({
+          debounceMs: DEBOUNCE_MS,
+          mode,
+          restartTimerOnChunk,
+        }),
       ),
       count,
       mode,
@@ -56,6 +63,7 @@ export default {
     ours("BOTH"),
     ours("LEADING"),
     ours("TRAILING"),
+    ours("TRAILING", true),
     {
       library: "native",
       name: "TransformStream with setTimeout (BOTH)",

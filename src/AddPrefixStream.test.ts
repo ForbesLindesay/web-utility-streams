@@ -275,6 +275,56 @@ test("AddPrefixStream - cancelling the output closes the prefix and cancels the 
   expect(reasons).toEqual(["Some reason"]);
 });
 
+test("AddPrefixStream - cancelling while reading a ReadableStream prefix cancels it straight away", async () => {
+  const reasons: unknown[] = [];
+  const prefix = new ReadableStream<number>({
+    start(controller) {
+      controller.enqueue(1);
+    },
+    cancel: (reason) => void reasons.push(reason),
+  });
+  const reader = new ReadableStream<number>()
+    .pipeThrough(new AddPrefixStream(prefix))
+    .getReader();
+  expect(await reader.read()).toEqual({ done: false, value: 1 });
+  // The prefix has no more chunks, so this read waits
+  const pendingRead = reader.read();
+  await delay(10);
+  await reader.cancel("Some reason");
+  expect(await pendingRead).toEqual({ done: true, value: undefined });
+  await delay(10);
+  expect(reasons).toEqual(["Some reason"]);
+});
+
+test("AddPrefixStream - cancelling doesn't wait for a pending read from an async prefix", async () => {
+  async function* prefix() {
+    yield 1;
+    await delay(1000);
+    throw new Error("Ignored, as the stream has been cancelled");
+  }
+  const reader = new ReadableStream<number>()
+    .pipeThrough(new AddPrefixStream(prefix()))
+    .getReader();
+  expect(await reader.read()).toEqual({ done: false, value: 1 });
+  const pendingRead = reader.read();
+  await delay(10);
+  const start = Date.now();
+  await reader.cancel();
+  expect(Date.now() - start).toBeLessThan(500);
+  expect(await pendingRead).toEqual({ done: true, value: undefined });
+  await delay(1100);
+});
+
+test("AddPrefixStream - doesn't need ReadableStream to be async iterable", async () => {
+  const prefix = readableStream([1, 2]);
+  Object.defineProperty(prefix, Symbol.asyncIterator, { value: undefined });
+  expect(
+    await readableStreamResults(
+      readableStream([3]).pipeThrough(new AddPrefixStream(prefix)),
+    ),
+  ).toEqual(values([1, 2, 3]));
+});
+
 test("AddPrefixStream - closes an iterable from the promise if cancelled while waiting for it", async () => {
   let closed = false;
   function* prefix() {
@@ -328,6 +378,12 @@ testTransformRobustness({
         yield "b";
       })(),
     ),
+  validInput: [1, 2, 3],
+});
+
+testTransformRobustness({
+  name: "AddPrefixStream (ReadableStream)",
+  create: () => new AddPrefixStream(readableStream(["a", new Delay(5), "b"])),
   validInput: [1, 2, 3],
 });
 

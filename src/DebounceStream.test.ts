@@ -47,7 +47,7 @@ async function debounce(
 
 const valuesOf = (emitted: Emitted[]) => emitted.map((e) => e.value);
 
-test("DebounceStream - BOTH emits the first and the most recent chunk", async () => {
+test("DebounceStream - both emits the first and the most recent chunk", async () => {
   const emitted = await debounce({ debounceMs: 100 }, [
     1,
     2,
@@ -61,7 +61,7 @@ test("DebounceStream - BOTH emits the first and the most recent chunk", async ()
   expect(emitted[1]!.time).toBeLessThan(140);
 });
 
-test("DebounceStream - LEADING only emits the first chunk in each period", async () => {
+test("DebounceStream - leading only emits the first chunk in each period", async () => {
   const emitted = await debounce({ debounceMs: 100, mode: "LEADING" }, [
     1,
     2,
@@ -75,7 +75,7 @@ test("DebounceStream - LEADING only emits the first chunk in each period", async
   expect(emitted[1]!.time).toBeGreaterThanOrEqual(140);
 });
 
-test("DebounceStream - TRAILING emits the most recent chunk at the end of each period", async () => {
+test("DebounceStream - trailing emits the most recent chunk at the end of each period", async () => {
   const emitted = await debounce({ debounceMs: 100, mode: "TRAILING" }, [
     1,
     2,
@@ -87,7 +87,7 @@ test("DebounceStream - TRAILING emits the most recent chunk at the end of each p
   expect(emitted[0]!.time).toBeLessThan(140);
 });
 
-test("DebounceStream - BOTH only emits a single chunk once", async () => {
+test("DebounceStream - both only emits a single chunk once", async () => {
   expect(
     valuesOf(await debounce({ debounceMs: 50 }, [1, new Delay(100)])),
   ).toEqual([1]);
@@ -125,6 +125,42 @@ test("DebounceStream - emitting a trailing chunk starts a new period", async () 
   expect(emitted[2]!.time).toBeLessThan(240);
 });
 
+test("DebounceStream - restartTimerOnChunk extends the period on each chunk", async () => {
+  const steps = [1, new Delay(60), 2, new Delay(60), 3, new Delay(150)];
+  // Without restarting, the period ends at 100ms and 200ms
+  expect(
+    valuesOf(await debounce({ debounceMs: 100, mode: "TRAILING" }, steps)),
+  ).toEqual([2, 3]);
+  // With restarting, the period only ends 100ms after 3 is written
+  for (const mode of ["TRAILING", "BOTH"] as const) {
+    const emitted = await debounce(
+      { debounceMs: 100, mode, restartTimerOnChunk: true },
+      steps,
+    );
+    expect(valuesOf(emitted)).toEqual(mode === "BOTH" ? [1, 3] : [3]);
+    expect(emitted.at(-1)!.time).toBeGreaterThanOrEqual(210);
+    expect(emitted.at(-1)!.time).toBeLessThan(260);
+  }
+});
+
+test("DebounceStream - restartTimerOnChunk with leading drops chunks until there is a gap", async () => {
+  const emitted = await debounce(
+    { debounceMs: 100, mode: "LEADING", restartTimerOnChunk: true },
+    [
+      1,
+      new Delay(60),
+      2,
+      new Delay(60),
+      3,
+      new Delay(60),
+      4,
+      new Delay(150),
+      5,
+    ],
+  );
+  expect(valuesOf(emitted)).toEqual([1, 5]);
+});
+
 test("DebounceStream - closing emits the waiting chunk straight away", async () => {
   for (const mode of ["TRAILING", "BOTH"] as const) {
     const start = Date.now();
@@ -134,7 +170,7 @@ test("DebounceStream - closing emits the waiting chunk straight away", async () 
   }
 });
 
-test("DebounceStream - closing with LEADING drops the chunks in the current period", async () => {
+test("DebounceStream - closing with leading drops the chunks in the current period", async () => {
   expect(
     valuesOf(await debounce({ debounceMs: 1000, mode: "LEADING" }, [1, 2, 3])),
   ).toEqual([1]);
@@ -233,9 +269,12 @@ test("DebounceStream - is typed as a TransformStream", async () => {
 // The test source writes a chunk every 15ms, so with a shorter period every
 // chunk is emitted, which the robustness tests need.
 for (const mode of ["LEADING", "TRAILING", "BOTH"] as const) {
-  testTransformRobustness({
-    name: `DebounceStream (${mode})`,
-    create: () => new DebounceStream({ debounceMs: 5, mode }),
-    validInput: [1, 2, 3],
-  });
+  for (const restartTimerOnChunk of [false, true]) {
+    testTransformRobustness({
+      name: `DebounceStream (${mode}${restartTimerOnChunk ? ", restartTimerOnChunk" : ""})`,
+      create: () =>
+        new DebounceStream({ debounceMs: 5, mode, restartTimerOnChunk }),
+      validInput: [1, 2, 3],
+    });
+  }
 }

@@ -1,26 +1,30 @@
 export type AddPrefixStreamPrefix<TChunk> =
   | AsyncIterable<TChunk>
   | Iterable<TChunk>
-  | PromiseLike<AsyncIterable<TChunk> | Iterable<TChunk>>;
+  | ReadableStream<TChunk>
+  | PromiseLike<
+      AsyncIterable<TChunk> | Iterable<TChunk> | ReadableStream<TChunk>
+    >;
+
+interface PrefixIterator<TChunk> {
+  next(): IteratorResult<TChunk> | PromiseLike<IteratorResult<TChunk>>;
+  return?(reason?: unknown): unknown;
+}
 
 const noop = () => {};
 
 /**
- * Pass every chunk through unchanged, after first emitting the chunks of
- * `prefix`. The prefix can be an iterable, an async iterable, or a promise
- * for either.
+ * Emit the chunks of `prefix`, then pass every chunk written to the stream
+ * through unchanged. The prefix can be an iterable, an async iterable, a
+ * `ReadableStream`, or a promise for any of these.
  *
- * - The prefix is read one chunk at a time, as the output is read, so
- *   backpressure is preserved. Chunks written to this stream wait until the
- *   whole prefix has been emitted. After that, up to 4 chunks are read ahead
- *   of the output, which makes passing them through much faster.
- * - If the promise rejects, or the prefix throws while it is being read, the
- *   stream is errored, so the source of a pipeline is cancelled.
- * - If the writable side is aborted (e.g. the source of a pipeline errors),
- *   the output is errored immediately, even if the prefix hasn't finished.
- * - If the output is cancelled, or the stream errors, before the prefix has
- *   finished, the prefix's iterator is closed (by calling its `return`
- *   method).
+ * - The prefix is read as the output is read. Written chunks wait until the
+ *   prefix is done, and then up to 4 are read ahead of the output.
+ * - If the prefix errors, the stream is errored, cancelling the source.
+ * - If the writable side is aborted, the output is errored straight away.
+ * - If the stream is cancelled or errors before the prefix is done, the
+ *   prefix is closed (by calling its iterator's `return` method, or by
+ *   cancelling the `ReadableStream`).
  */
 export default class AddPrefixStream<TChunk> implements TransformStream<
   TChunk,
@@ -43,9 +47,10 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
     let writableController!: WritableStreamDefaultController;
     // Set once either side has closed, errored or been cancelled
     let isFinished = false;
+    let finishReason: unknown;
 
     // The prefix's iterator, until the whole prefix has been read
-    let iterator: Iterator<TChunk> | AsyncIterator<TChunk> | undefined;
+    let iterator: PrefixIterator<TChunk> | undefined;
     let isAsyncIterator = false;
     let isPrefixDone = false;
 
@@ -56,11 +61,25 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
       | undefined;
     let isWritableClosed = false;
 
+    // Close the prefix without waiting for it, as an async iterator can only
+    // be closed once any pending `next` call has finished.
+    const closePrefix = (): void => {
+      const it = iterator;
+      const reason = finishReason;
+      iterator = undefined;
+      if (it?.return) {
+        Promise.resolve()
+          .then(() => it.return!(reason))
+          .catch(noop);
+      }
+    };
+
     // Stop reading the prefix and the writable side
-    const finish = async (reason: unknown): Promise<void> => {
+    const finish = (reason: unknown): void => {
       isFinished = true;
+      finishReason = reason;
       pendingWrite?.reject(reason);
-      await iterator?.return?.(reason);
+      closePrefix();
     };
 
     // Error both sides. Erroring the writable side cancels the source of a
@@ -69,7 +88,7 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
       if (isFinished) return;
       readableController.error(err);
       writableController.error(err);
-      finish(err).catch(noop);
+      finish(err);
     };
 
     // The writable side has been aborted, e.g. because the source of a
@@ -77,9 +96,8 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
     const abort = (reason: unknown): void => {
       if (isFinished) return;
       readableController.error(reason);
-      finish(reason).catch(noop);
+      finish(reason);
     };
-
     // Pass on a chunk that has been written, or close the readable side if
     // the writable side has closed
     const pullWritten = (): void => {
@@ -154,16 +172,30 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
           readableController = controller;
           try {
             const iterable = await prefix;
-            // Not using `in`, as that throws for strings
-            isAsyncIterator =
-              typeof (iterable as AsyncIterable<TChunk>)[
-                Symbol.asyncIterator
-              ] === "function";
-            iterator = isAsyncIterator
-              ? (iterable as AsyncIterable<TChunk>)[Symbol.asyncIterator]()
-              : (iterable as Iterable<TChunk>)[Symbol.iterator]();
+            if (
+              typeof (iterable as ReadableStream<TChunk>).getReader ===
+              "function"
+            ) {
+              // The built-in async iterator of a `ReadableStream` can't be
+              // closed while a read is pending, and isn't supported everywhere
+              const reader = (iterable as ReadableStream<TChunk>).getReader();
+              isAsyncIterator = true;
+              iterator = {
+                next: () => reader.read() as Promise<IteratorResult<TChunk>>,
+                return: (reason) => reader.cancel(reason),
+              };
+            } else {
+              // Not using `in`, as that throws for strings
+              isAsyncIterator =
+                typeof (iterable as AsyncIterable<TChunk>)[
+                  Symbol.asyncIterator
+                ] === "function";
+              iterator = isAsyncIterator
+                ? (iterable as AsyncIterable<TChunk>)[Symbol.asyncIterator]()
+                : (iterable as Iterable<TChunk>)[Symbol.iterator]();
+            }
             // If we were cancelled while waiting, close the iterator
-            if (isFinished) return await Promise.resolve(iterator.return?.());
+            if (isFinished) closePrefix();
           } catch (ex) {
             fail(ex);
           }
@@ -171,22 +203,21 @@ export default class AddPrefixStream<TChunk> implements TransformStream<
         pull() {
           if (isPrefixDone) return pullWritten();
           if (isAsyncIterator) {
-            return (iterator as AsyncIterator<TChunk>)
-              .next()
-              .then(onPrefixResult, fail);
+            return (
+              iterator!.next() as PromiseLike<IteratorResult<TChunk>>
+            ).then(onPrefixResult, fail);
           }
           let result;
           try {
-            result = (iterator as Iterator<TChunk>).next();
+            result = iterator!.next() as IteratorResult<TChunk>;
           } catch (ex) {
             return fail(ex);
           }
           onPrefixResult(result);
         },
         cancel(reason) {
-          if (isFinished) return;
           writableController.error(reason);
-          return finish(reason);
+          finish(reason);
         },
       },
       // Only read from the prefix when the output is read
