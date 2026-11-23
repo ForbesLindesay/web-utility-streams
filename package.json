@@ -16,6 +16,22 @@
       "types": "./lib/consumers.d.mts",
       "default": "./lib/consumers.mjs"
     },
+    "./CsvDecoderStream": {
+      "types": "./lib/CsvDecoderStream.d.mts",
+      "default": "./lib/CsvDecoderStream.mjs"
+    },
+    "./CsvEncoderStream": {
+      "types": "./lib/CsvEncoderStream.d.mts",
+      "default": "./lib/CsvEncoderStream.mjs"
+    },
+    "./CsvObjectDecoderStream": {
+      "types": "./lib/CsvObjectDecoderStream.d.mts",
+      "default": "./lib/CsvObjectDecoderStream.mjs"
+    },
+    "./CsvObjectEncoderStream": {
+      "types": "./lib/CsvObjectEncoderStream.d.mts",
+      "default": "./lib/CsvObjectEncoderStream.mjs"
+    },
     "./DebounceStream": {
       "types": "./lib/DebounceStream.d.mts",
       "default": "./lib/DebounceStream.mjs"
@@ -84,6 +100,14 @@
       "types": "./lib/SplitLinesStream.d.mts",
       "default": "./lib/SplitLinesStream.mjs"
     },
+    "./TableDecoderStream": {
+      "types": "./lib/TableDecoderStream.d.mts",
+      "default": "./lib/TableDecoderStream.mjs"
+    },
+    "./TableEncoderStream": {
+      "types": "./lib/TableEncoderStream.d.mts",
+      "default": "./lib/TableEncoderStream.mjs"
+    },
     "./TimeoutStream": {
       "types": "./lib/TimeoutStream.d.mts",
       "default": "./lib/TimeoutStream.mjs"
@@ -114,12 +138,17 @@
     "@types/jsonstream": "^0.8.33",
     "@types/ndjson": "^2.0.4",
     "@types/node": "^24.19.2",
+    "@types/papaparse": "^5.5.2",
     "@types/split2": "^4.2.3",
     "bfj": "^9.1.4",
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
     "eventsource-encoder": "^1.0.2",
     "eventsource-parser": "^4.1.3",
+    "fast-csv": "^5.0.8",
     "JSONStream": "^1.3.5",
     "ndjson": "^2.0.0",
+    "papaparse": "^5.7.1",
     "prettier": "^3.10.1",
     "split2": "^4.2.0",
     "stream-chain": "^4.4.2",

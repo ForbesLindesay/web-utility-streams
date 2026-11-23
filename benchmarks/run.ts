@@ -28,6 +28,7 @@ import {
   expectedIdSum,
   recordCountForBytes,
   writeDataFile,
+  type DataFileOptions,
   type DataFormat,
 } from "./data.ts";
 import type {
@@ -188,12 +189,16 @@ function check(
   }
 }
 
-async function ensureDataFile(format: DataFormat, size: Size): Promise<void> {
-  const file = dataFile(format, size.name);
+async function ensureDataFile(
+  format: DataFormat,
+  size: Size,
+  options: DataFileOptions,
+): Promise<void> {
+  const file = dataFile(format, size.name, options);
   if (fs.existsSync(file)) return;
   process.stderr.write(`Generating ${file}... `);
   const start = performance.now();
-  await writeDataFile(file, format, recordCountForBytes(size.bytes));
+  await writeDataFile(file, format, recordCountForBytes(size.bytes), options);
   process.stderr.write(
     `done (${formatBytes(fs.statSync(file).size)} in ${formatTime(performance.now() - start)})\n`,
   );
@@ -229,9 +234,10 @@ for (const suiteName of suiteNames) {
   for (const size of sizes) {
     const runs = Number(options.runs ?? (size.bytes <= 100e6 ? 5 : 1));
     const format = suite.encoder || suite.generated ? undefined : suite.format;
-    if (format) await ensureDataFile(format, size);
+    const fileOptions = { headers: suite.headers };
+    if (format) await ensureDataFile(format, size, fileOptions);
     const fileBytes = format
-      ? fs.statSync(dataFile(format, size.name)).size
+      ? fs.statSync(dataFile(format, size.name, fileOptions)).size
       : undefined;
 
     const rows: Row[] = [];
