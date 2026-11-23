@@ -3,7 +3,7 @@ import CsvDecoderStream from "./CsvDecoderStream.js";
 import { CsvEncoder } from "./CsvEncoderStream.js";
 import CsvObjectDecoderStream, {
   type CsvObjectDecoderStreamOptions,
-  type CsvRow,
+  type TableRow,
 } from "./CsvObjectDecoderStream.js";
 import TableDecoderStream from "./TableDecoderStream.js";
 import { testTransformRobustness } from "./internal/StreamTestUtils.js";
@@ -27,7 +27,7 @@ function chunks(text: string, size = 3): string[] {
 
 function decodeCsv<T>(
   text: string,
-  getObject: (row: CsvRow) => T,
+  getObject: (row: TableRow) => T,
   options?: CsvObjectDecoderStreamOptions<T>,
 ) {
   return collect(
@@ -43,7 +43,7 @@ function decodeCsv<T>(
  */
 function decodeCsvChained<T>(
   text: string,
-  getObject: (row: CsvRow) => T,
+  getObject: (row: TableRow) => T,
   options?: CsvObjectDecoderStreamOptions<T>,
 ) {
   return collect(
@@ -60,7 +60,7 @@ testTableDecoder("CsvObjectDecoderStream", (rows, getObject, options) => {
 });
 
 describe("CsvObjectDecoderStream - CSV", () => {
-  const toObject = (row: CsvRow) => row.toObject();
+  const toObject = (row: TableRow) => row.toObject();
 
   test("decodes quoted headers and fields, split across chunks", async () => {
     expect(
@@ -106,7 +106,7 @@ describe("CsvObjectDecoderStream - CSV", () => {
   ])(
     "gives the same result as CsvDecoderStream piped into TableDecoderStream: %s",
     async (_, text) => {
-      const getObject = (row: CsvRow) => [
+      const getObject = (row: TableRow<"a" | "b">) => [
         row.index,
         row.toObject(),
         row.getOptional("b"),

@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import CsvEncoderStream from "./CsvEncoderStream.js";
 import CsvObjectDecoderStream from "./CsvObjectDecoderStream.js";
 import CsvObjectEncoderStream, {
-  type CsvColumn,
+  type TableColumn,
   type CsvObjectEncoderStreamOptions,
 } from "./CsvObjectEncoderStream.js";
 import TableEncoderStream from "./TableEncoderStream.js";
@@ -14,10 +14,10 @@ interface User {
   name: string;
 }
 
-const columns: CsvColumn<User>[] = [
+const columns = [
   ["id", (u) => String(u.id)],
   ["name", (u) => u.name],
-];
+] satisfies TableColumn<User>[];
 
 const users: User[] = [
   { id: 1, name: "Ada" },
@@ -26,7 +26,7 @@ const users: User[] = [
 
 async function encode<T>(
   objects: T[],
-  cols: readonly CsvColumn<T>[],
+  cols: readonly TableColumn<T>[],
   options?: CsvObjectEncoderStreamOptions,
 ) {
   const { values, error } = await collect(
@@ -41,7 +41,7 @@ async function encode<T>(
  */
 async function encodeChained<T>(
   objects: T[],
-  cols: readonly CsvColumn<T>[],
+  cols: readonly TableColumn<T>[],
   options?: CsvObjectEncoderStreamOptions,
 ) {
   const { values, error } = await collect(
