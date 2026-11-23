@@ -82,6 +82,8 @@ export interface Suite {
   description: string;
   /** The format of the data file this suite reads, or that encoders produce */
   format?: DataFormat;
+  /** Whether the data file has a header row (for CSV) */
+  headers?: boolean;
   /** Whether the cases encode generated records, rather than reading a file */
   encoder?: boolean;
   /** Whether the cases read a generated stream of `{ id }` chunks */

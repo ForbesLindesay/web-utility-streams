@@ -1,12 +1,10 @@
 import { CsvDecoder, type CsvDecoderOptions } from "./CsvDecoderStream.js";
 import TableDecoder, {
-  type TableCellParser,
   type TableDecoderOptions,
   type TableRow,
 } from "./internal/TableDecoder.js";
 
-export type CsvCellParser<T> = TableCellParser<T>;
-export type CsvRow = TableRow;
+export type { TableCellParser, TableRow } from "./internal/TableDecoder.js";
 
 export interface CsvObjectDecoderStreamOptions<TObject>
   extends CsvDecoderOptions, TableDecoderOptions<TObject> {}
@@ -16,7 +14,7 @@ export default class CsvObjectDecoderStream<TObject> extends TransformStream<
   TObject
 > {
   constructor(
-    getObject: (row: CsvRow) => TObject,
+    getObject: (row: TableRow) => TObject,
     options: CsvObjectDecoderStreamOptions<TObject> = {},
   ) {
     let decoder!: CsvDecoder;

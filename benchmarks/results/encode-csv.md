@@ -10,25 +10,25 @@ Encode generated records as CSV rows of 12 fields, discarding the output. Conver
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvEncoderStream** | **50 ms (114 MB/s)** | 106 MB |
-| fast-csv | format() (Node streams) | 72 ms (79 MB/s) | 113 MB |
-| csv-stringify | stringify() (Node streams) | 92 ms (61 MB/s) | 113 MB |
-| baseline | Generate the rows only | 26 ms | 99.2 MB |
+| **web-utility-streams** | **CsvEncoderStream** | **51 ms (111 MB/s)** | 105 MB |
+| fast-csv | format() (Node streams) | 78 ms (73 MB/s) | 113 MB |
+| csv-stringify | stringify() (Node streams) | 95 ms (59 MB/s) | 104 MB |
+| baseline | Generate the rows only | 27 ms | 99.4 MB |
 
 ## 256MB (867,325 records)
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvEncoderStream** | **1.09 s (137 MB/s)** | 194 MB |
-| fast-csv | format() (Node streams) | 1.63 s (91 MB/s) | 201 MB |
-| csv-stringify | stringify() (Node streams) | 2.09 s (71 MB/s) | 249 MB |
-| baseline | Generate the rows only | 587 ms | 184 MB |
+| **web-utility-streams** | **CsvEncoderStream** | **1.13 s (132 MB/s)** | 194 MB |
+| fast-csv | format() (Node streams) | 1.67 s (89 MB/s) | 200 MB |
+| csv-stringify | stringify() (Node streams) | 2.16 s (69 MB/s) | 246 MB |
+| baseline | Generate the rows only | 603 ms | 185 MB |
 
 ## 2GB (6,775,981 records)
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvEncoderStream** | **8.37 s (142 MB/s)** | 307 MB |
-| fast-csv | format() (Node streams) | 12.62 s (94 MB/s) | 300 MB |
-| csv-stringify | stringify() (Node streams) | 16.69 s (71 MB/s) | 303 MB |
-| baseline | Generate the rows only | 4.57 s | 295 MB |
+| **web-utility-streams** | **CsvEncoderStream** | **8.69 s (137 MB/s)** | 302 MB |
+| fast-csv | format() (Node streams) | 12.94 s (92 MB/s) | 307 MB |
+| csv-stringify | stringify() (Node streams) | 16.75 s (71 MB/s) | 302 MB |
+| baseline | Generate the rows only | 4.70 s | 295 MB |

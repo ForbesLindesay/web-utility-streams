@@ -22,7 +22,9 @@ const size = Number(sizeBytes);
 const start = performance.now();
 const result = await benchmark.run({
   // Suites with generated input don't read a file
-  file: suite.format ? dataFile(suite.format, sizeName) : "",
+  file: suite.format
+    ? dataFile(suite.format, sizeName, { headers: suite.headers })
+    : "",
   count: recordCountForBytes(size),
   size,
   verify: mode === "verify",

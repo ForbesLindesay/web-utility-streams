@@ -491,6 +491,15 @@ describe("CsvDecoder - chunks", () => {
     ['a;"b,c,d";\te\r\n1;2;3'],
     ['"a\\",b,c";d\n', { escape: "\\" }],
     ['"a'],
+    // Ending in each state that depends on the next chunk
+    ['a,"b"'],
+    ['a,"b""'],
+    ['"a""""b",""'],
+    ["a,  "],
+    ['a,  "b"  ,  c  '],
+    ['"a\\', { escape: "\\" }],
+    ['"a\\\\"', { escape: "\\" }],
+    ['"a\\x\\"', { escape: "\\" }],
   ];
   test.each(inputs)(
     "gives the same result however %j is split",
@@ -505,7 +514,7 @@ describe("CsvDecoder - chunks", () => {
     },
   );
 
-  test("only keeps a few characters between chunks", () => {
+  test("doesn't keep any text between chunks once the delimiter is known", () => {
     const rows: string[][] = [];
     const decoder = new CsvDecoder((row) => rows.push(row), {
       delimiter: ",",
@@ -514,22 +523,52 @@ describe("CsvDecoder - chunks", () => {
     expect(bufferedText(decoder)).toBe("");
     // The quote could be the start of an escaped quote
     decoder.parse('c""d"', false);
-    expect(bufferedText(decoder)).toBe('"');
+    expect(bufferedText(decoder)).toBe("");
     decoder.parse(",e\n", false);
     expect(bufferedText(decoder)).toBe("");
     expect(rows).toEqual([["a", 'bc"d', "e"]]);
     decoder.parse(' "', false);
     expect(bufferedText(decoder)).toBe("");
     decoder.parse('f"', false);
-    expect(bufferedText(decoder)).toBe('"');
+    expect(bufferedText(decoder)).toBe("");
     // The spaces could be followed by a quote
     decoder.parse(" ,  ", false);
-    expect(bufferedText(decoder)).toBe("  ");
-    decoder.parse("g", true);
     expect(bufferedText(decoder)).toBe("");
+    decoder.parse("g", true);
     expect(rows).toEqual([
       ["a", 'bc"d', "e"],
       ["f", "  g"],
+    ]);
+
+    // An escape character at the end of a chunk
+    const escaped: string[][] = [];
+    const escapeDecoder = new CsvDecoder((row) => escaped.push(row), {
+      delimiter: ",",
+      escape: "\\",
+    });
+    for (const chunk of ['"a\\', '"b\\', "\\c\\", 'd"\n']) {
+      escapeDecoder.parse(chunk, false);
+      expect(bufferedText(escapeDecoder)).toBe("");
+    }
+    expect(escaped).toEqual([['a"b\\c\\d']]);
+  });
+
+  test("only keeps text while guessing the delimiter", () => {
+    const rows: string[][] = [];
+    const decoder = new CsvDecoder((row) => rows.push(row));
+    decoder.parse("a;b", false);
+    expect(bufferedText(decoder)).toBe("a;b");
+    decoder.parse(';"c', false);
+    expect(bufferedText(decoder)).toBe('a;b;"c');
+    decoder.parse('"\nd;"e', false);
+    expect(bufferedText(decoder)).toBe("");
+    expect(rows).toEqual([["a", "b", "c"]]);
+    decoder.parse('""', false);
+    expect(bufferedText(decoder)).toBe("");
+    decoder.parse('"', true);
+    expect(rows).toEqual([
+      ["a", "b", "c"],
+      ["d", 'e"'],
     ]);
   });
 
@@ -554,7 +593,7 @@ describe("CsvDecoder - round trips with CsvEncoder", () => {
   test("an empty row is a blank line, but a row with one empty field is kept", () => {
     const encoder = new CsvEncoder({ includeEndRowDelimiter: true });
     const text = [["a"], [], [""], ["b"]]
-      .map((row, i) => encoder.formatRow(row, i === 0))
+      .map((row) => encoder.formatRow(row))
       .join("");
     expect(text).toBe('a\n\n""\nb\n');
     expect(decode(text, { delimiter: "," })).toEqual([
@@ -615,9 +654,7 @@ describe("CsvDecoder - round trips with CsvEncoder", () => {
         rows.push(row);
       }
       const encoder = new CsvEncoder(options);
-      const text = rows
-        .map((row, i) => encoder.formatRow(row, i === 0))
-        .join("");
+      const text = rows.map((row) => encoder.formatRow(row)).join("");
       const split = Math.floor(rand() * text.length);
       const { delimiter = ",", quote, escape } = options;
       // Rows with a single blank field are quoted, so they're kept even if

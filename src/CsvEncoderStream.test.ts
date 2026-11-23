@@ -22,7 +22,7 @@ async function encodeStream(
 
 function encode(rows: string[][], options?: CsvEncoderOptions): string {
   const encoder = new CsvEncoder(options);
-  return rows.map((row, i) => encoder.formatRow(row, i === 0)).join("");
+  return rows.map((row) => encoder.formatRow(row)).join("");
 }
 
 describe("CsvEncoderStream", () => {
@@ -93,11 +93,11 @@ describe("CsvEncoderStream", () => {
 
   test("formatRow", () => {
     const encoder = new CsvEncoder({ writeBOM: true });
-    expect(encoder.formatRow(["a", "b"], true)).toBe("\ufeffa,b");
-    expect(encoder.formatRow(["c", "d"], false)).toBe("\nc,d");
+    expect(encoder.formatRow(["a", "b"])).toBe("\ufeffa,b");
+    expect(encoder.formatRow(["c", "d"])).toBe("\nc,d");
     const withEnd = new CsvEncoder({ includeEndRowDelimiter: true });
-    expect(withEnd.formatRow(["a"], true)).toBe("a\n");
-    expect(withEnd.formatRow(["b"], false)).toBe("b\n");
+    expect(withEnd.formatRow(["a"])).toBe("a\n");
+    expect(withEnd.formatRow(["b"])).toBe("b\n");
   });
 
   test("writeBOM", () => {

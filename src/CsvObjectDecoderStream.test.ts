@@ -55,7 +55,7 @@ function decodeCsvChained<T>(
 
 testTableDecoder("CsvObjectDecoderStream", (rows, getObject, options) => {
   const encoder = new CsvEncoder();
-  const text = rows.map((row, i) => encoder.formatRow(row, i === 0)).join("");
+  const text = rows.map((row) => encoder.formatRow(row)).join("");
   return decodeCsv(text, getObject, options);
 });
 

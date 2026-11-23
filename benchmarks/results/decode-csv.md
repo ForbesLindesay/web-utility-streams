@@ -10,31 +10,31 @@ Decode a CSV file with one row of 12 fields per record (no header row), where on
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvDecoderStream** | **26 ms (223 MB/s)** | 99.8 MB |
-| papaparse | Papa.parse(NODE_STREAM_INPUT) | 50 ms (116 MB/s) | 118 MB |
-| csv-parse | parse() (Node streams) | 99 ms (58 MB/s) | 102 MB |
-| csv-parse | csv-parse/stream (web streams) | 104 ms (56 MB/s) | 103 MB |
-| fast-csv | parse() (Node streams) | 181 ms (32 MB/s) | 137 MB |
-| baseline | Read the file through TextDecoderStream only | 11 ms (535 MB/s) | 98.1 MB |
+| **web-utility-streams** | **CsvDecoderStream** | **28 ms (208 MB/s)** | 101 MB |
+| papaparse | Papa.parse(NODE_STREAM_INPUT) | 52 ms (110 MB/s) | 118 MB |
+| csv-parse | parse() (Node streams) | 100 ms (57 MB/s) | 101 MB |
+| csv-parse | csv-parse/stream (web streams) | 106 ms (54 MB/s) | 104 MB |
+| fast-csv | parse() (Node streams) | 190 ms (30 MB/s) | 138 MB |
+| baseline | Read the file through TextDecoderStream only | 12 ms (500 MB/s) | 98.2 MB |
 
 ## 256MB (151 MB, 867,325 records)
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvDecoderStream** | **460 ms (329 MB/s)** | 108 MB |
-| papaparse | Papa.parse(NODE_STREAM_INPUT) | 898 ms (169 MB/s) | 161 MB |
-| csv-parse | parse() (Node streams) | 2.13 s (71 MB/s) | 102 MB |
-| csv-parse | csv-parse/stream (web streams) | 2.15 s (70 MB/s) | 102 MB |
-| fast-csv | parse() (Node streams) | 4.28 s (35 MB/s) | 257 MB |
-| baseline | Read the file through TextDecoderStream only | 132 ms (1143 MB/s) | 104 MB |
+| **web-utility-streams** | **CsvDecoderStream** | **455 ms (333 MB/s)** | 109 MB |
+| papaparse | Papa.parse(NODE_STREAM_INPUT) | 910 ms (166 MB/s) | 159 MB |
+| csv-parse | csv-parse/stream (web streams) | 2.14 s (71 MB/s) | 105 MB |
+| csv-parse | parse() (Node streams) | 2.25 s (67 MB/s) | 103 MB |
+| fast-csv | parse() (Node streams) | 4.21 s (36 MB/s) | 252 MB |
+| baseline | Read the file through TextDecoderStream only | 135 ms (1124 MB/s) | 104 MB |
 
 ## 2GB (1.21 GB, 6,775,981 records)
 
 | Library | Approach | Time | Peak memory |
 | --- | --- | --- | --- |
-| **web-utility-streams** | **CsvDecoderStream** | **3.53 s (343 MB/s)** | 149 MB |
-| papaparse | Papa.parse(NODE_STREAM_INPUT) | 6.78 s (178 MB/s) | 221 MB |
-| csv-parse | csv-parse/stream (web streams) | 16.40 s (74 MB/s) | 107 MB |
-| csv-parse | parse() (Node streams) | 17.30 s (70 MB/s) | 104 MB |
-| fast-csv | parse() (Node streams) | 32.67 s (37 MB/s) | 272 MB |
-| baseline | Read the file through TextDecoderStream only | 1.01 s (1199 MB/s) | 106 MB |
+| **web-utility-streams** | **CsvDecoderStream** | **3.49 s (346 MB/s)** | 150 MB |
+| papaparse | Papa.parse(NODE_STREAM_INPUT) | 6.97 s (173 MB/s) | 220 MB |
+| csv-parse | csv-parse/stream (web streams) | 16.56 s (73 MB/s) | 107 MB |
+| csv-parse | parse() (Node streams) | 17.32 s (70 MB/s) | 104 MB |
+| fast-csv | parse() (Node streams) | 32.96 s (37 MB/s) | 290 MB |
+| baseline | Read the file through TextDecoderStream only | 1.02 s (1188 MB/s) | 106 MB |

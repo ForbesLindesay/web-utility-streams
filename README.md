@@ -9,6 +9,8 @@ Various utility streams that are very useful for working with web streams.
 - [`AddPrefixStream`](#addprefixstream) - Emit some chunks before the rest of the stream.
 - [`CsvDecoderStream`](#csvdecoderstream) - Decode CSV text into rows.
 - [`CsvEncoderStream`](#csvencoderstream) - Encode rows as CSV text.
+- [`CsvObjectDecoderStream`](#csvobjectdecoderstream) - Decode CSV text with a header row into objects.
+- [`CsvObjectEncoderStream`](#csvobjectencoderstream) - Encode objects as CSV text with a header row.
 - [`DebounceStream`](#debouncestream) - Emit at most one chunk per period, dropping the rest.
 - [`DebugStream`](#debugstream) - Call a function with each chunk as it passes through.
 - [`EventSourceDecoderStream`](#eventsourcedecoderstream) - Decode `text/event-stream` (Server-Sent Events) text into events.
@@ -22,6 +24,8 @@ Various utility streams that are very useful for working with web streams.
 - [`NewlineDelimitedJsonDecoderStream`](#newlinedelimitedjsondecoderstream) - Parse each line of NDJSON text into a value.
 - [`NewlineDelimitedJsonEncoderStream`](#newlinedelimitedjsonencoderstream) - Encode each value as a line of NDJSON.
 - [`SplitLinesStream`](#splitlinesstream) - Split text into lines.
+- [`TableDecoderStream`](#tabledecoderstream) - Turn rows (with a header row) into objects.
+- [`TableEncoderStream`](#tableencoderstream) - Turn objects into rows, with a header row.
 - [`TimeoutStream`](#timeoutstream) - Error the stream if no chunk arrives for too long.
 - [`TransformPipelineStream`](#transformpipelinestream) - Combine several transform streams into one.
 - [`TransformStreamWithCancel`](#transformstreamwithcancel) - A `TransformStream` that calls the transformer's `cancel` method, in any runtime.
@@ -102,38 +106,13 @@ Fields can be quoted, so they can contain delimiters, quotes and line breaks. A 
 
 If you don't pass a `delimiter`, it's guessed from the first line of the text: whichever of `","`, `";"` and `"\t"` appears most often, not counting any in quoted fields. If there's a tie, or none of them appear, `","` is preferred, then `";"`. No rows are emitted until the end of the first line has been read, or `maxCharsToGuessDelimiter` characters (10,000 by default), if that comes first. That limit is checked after each chunk, so all of the chunk that reaches it is used to guess. If you know which delimiter your data uses, it's best to pass it, as a file with a single column could contain one of these characters in its first line. You must pass a `delimiter` if `quote` or `escape` is one of these characters.
 
-The rows are arrays, so if your CSV has a header row, you can use the first row to turn the rest into objects:
+If your CSV has a header row, and you want each row as an object, use [`CsvObjectDecoderStream`](#csvobjectdecoderstream) instead.
 
-```ts
-let headers: string[] | undefined;
-const users = rows.pipeThrough(
-  new FilterMapStream((row) => {
-    if (!headers) {
-      headers = row;
-      return undefined;
-    }
-    return Object.fromEntries(headers.map((header, i) => [header, row[i]]));
-  }),
-);
-```
-
-The parser is also exported as `CsvDecoder`, if you want to parse CSV text without using streams. Pass a function to call with each row (and any options) to its constructor, then call `parse(chunk, isFinal)` for each chunk of text, with `isFinal: true` for the last one (which can be empty):
-
-```ts
-import { CsvDecoder } from "web-utility-streams/CsvDecoderStream";
-
-const rows: string[][] = [];
-const decoder = new CsvDecoder((row) => rows.push(row));
-decoder.parse('id,name\n1,"Smith, Jane"\n2,', false);
-decoder.parse("John Doe", true);
-// rows: [["id", "name"], ["1", "Smith, Jane"], ["2", "John Doe"]]
-```
-
-Its results match [fast-csv](https://www.npmjs.com/package/fast-csv)'s for the same options (fast-csv always uses `","` by default, rather than guessing), except that blank lines are emitted as `[""]` rather than `[]`, and fields that only contain spaces are always kept as they are. In our benchmarks, it's about twice as fast as papaparse, 5 times as fast as csv-parse, and 7-10 times as fast as fast-csv (see [benchmarks/results/decode-csv.md](benchmarks/results/decode-csv.md)).
+The parser is also exported as `CsvDecoder`, if you want to parse CSV text without using streams.
 
 ### CsvEncoderStream
 
-Encode a stream of rows (arrays of strings) as CSV text. By default, fields are quoted if they contain the delimiter, a quote or a line break, and quotes within them are escaped. Unless `quoteMode` is `"NEVER"`, a row with a single field that is empty (or only contains spaces and tabs) is always quoted, so it isn't written as a blank line. An empty row (`[]`) is written as a blank line. Otherwise, the output is the same as [fast-csv](https://www.npmjs.com/package/fast-csv)'s `format` for the same options. It can be decoded by `CsvDecoderStream`. `delimiter`, `quote` and `escape` must each be a single character that isn't a line break, and `delimiter` and `quote` must be different (unless `quoteMode` is `"NEVER"`). It's about 1.5 times as fast as fast-csv, and twice as fast as csv-stringify (see [benchmarks/results/encode-csv.md](benchmarks/results/encode-csv.md)).
+Encode a stream of rows (arrays of strings) as CSV text. By default, fields are quoted if they contain the delimiter, a quote or a line break, and quotes within them are escaped.
 
 ```ts
 import CsvEncoderStream from "web-utility-streams/CsvEncoderStream";
@@ -149,7 +128,7 @@ return new Response(
 );
 ```
 
-Every field must be a string, so convert other values (e.g. numbers, or `null` to `""`) before encoding them. Null characters (`"\0"`) are removed. These options can be passed to the constructor:
+Every field must be a string, so convert other values (e.g. numbers, or `null` to `""`) before encoding them. These options can be passed to the constructor:
 
 | Option                   | Description                                                                                                                                                      | Default             |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
@@ -161,7 +140,88 @@ Every field must be a string, so convert other values (e.g. numbers, or `null` t
 | `quoteMode`              | `"AUTO"` quotes fields that need it (those containing the delimiter, a quote or a line break), `"ALWAYS"` quotes every field, and `"NEVER"` never quotes fields. | `"AUTO"`            |
 | `writeBOM`               | Write a byte order mark at the start of the output, which helps some programs (e.g. Excel) detect that the text is UTF-8.                                        | `false`             |
 
-The encoder is also exported as `CsvEncoder`, whose `formatRow(row, isFirst)` method returns the text for one row. Pass `isFirst: true` for the first row, so the byte order mark (if `writeBOM` is set) is written before it, and the row delimiter isn't written before it.
+If you're encoding objects, and want a header row, use [`CsvObjectEncoderStream`](#csvobjectencoderstream) instead.
+
+The encoder is also exported as `CsvEncoder`, if you want to encode CSV text without using streams.
+
+### CsvObjectDecoderStream
+
+Decode a stream of CSV text, whose first row is a header row, into objects. Pass a function that builds the object for each row, by looking its fields up by column name:
+
+```ts
+import CsvObjectDecoderStream from "web-utility-streams/CsvObjectDecoderStream";
+
+const response = await fetch("https://example.com/users.csv");
+const users = response.body!.pipeThrough(new TextDecoderStream()).pipeThrough(
+  new CsvObjectDecoderStream((row) => ({
+    id: row.parse("id", parseInteger),
+    name: row.get("name"),
+    email: row.getOptional("email") ?? null,
+  })),
+);
+
+for await (const user of users) {
+  console.log(user.id, user.name, user.email);
+}
+
+function parseInteger(value: string): number {
+  if (!/^-?\d+$/.test(value)) throw new Error(`Expected an integer`);
+  return Number(value);
+}
+```
+
+The function is passed a row, which has these properties and methods (call them on the row, rather than destructuring them):
+
+| Property or method                  | Description                                                                                                                                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index`                             | The 0-based index of the row, not counting the header row. This isn't the line number, as quoted fields can contain line breaks.                                                                               |
+| `get(columnName)`                   | The value of a column. Throws a "missing column" error if there's no column with that name.                                                                                                                    |
+| `getOptional(columnName)`           | The value of a column, or `undefined` if there's no column with that name.                                                                                                                                     |
+| `parse(columnName, parser)`         | The value of a column (as with `get`), passed through `parser`, which is a function or an object with a `parse` method (such as a [Funtypes](https://funtypes.dev) schema). If it throws, the cell is invalid. |
+| `parseOptional(columnName, parser)` | The same as `parse`, but returns `undefined` (without calling `parser`) if there's no column with that name.                                                                                                   |
+| `toObject()`                        | The whole row, as an object whose keys are the column names, and whose values are strings.                                                                                                                     |
+
+A header row can contain the same column name more than once, but reading that column (or calling `toObject()`) throws a "duplicate column" error.
+
+By default, any of these errors, or any error thrown by your function, errors the stream with `Error decoding row <index>: <message>`, whose `cause` is the original error. To skip rows with errors instead, or replace them, pass these options. Each is passed the stream's controller, so it can enqueue a replacement value with `controller.enqueue(value)`, or end the stream with `controller.error(err)`. If it does neither, the row is skipped.
+
+| Option              | Called with                              | Called when                                                                                                      |
+| ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `onHeaders`         | `(headers)`                              | The header row has been read, before any objects are emitted.                                                    |
+| `onMissingColumn`   | `(columnName, controller)`               | `get` or `parse` is called with a column name that isn't in the header row.                                      |
+| `onDuplicateColumn` | `(columnName, controller)`               | A column that appears more than once in the header row is read.                                                  |
+| `onInvalidCell`     | `(index, columnName, error, controller)` | A parser throws. `error` is the error it threw.                                                                  |
+| `onInvalidRow`      | `(index, error, controller)`             | A row has too many fields, your function throws, or one of the errors above happens and its option isn't passed. |
+
+All of [`CsvDecoderStream`](#csvdecoderstream)'s options can also be passed. It gives the same results as piping [`CsvDecoderStream`](#csvdecoderstream) into [`TableDecoderStream`](#tabledecoderstream), but is about 10–15% faster, as each row doesn't have to go through a second stream (see [benchmarks/results/decode-csv-objects.md](benchmarks/results/decode-csv-objects.md)).
+
+### CsvObjectEncoderStream
+
+Encode a stream of objects as CSV text, with a header row. Pass an array of columns, where each column is a header and a function that gets that column's field from an object (and its 0-based index):
+
+```ts
+import CsvObjectEncoderStream from "web-utility-streams/CsvObjectEncoderStream";
+
+return new Response(
+  users
+    .pipeThrough(
+      new CsvObjectEncoderStream<User>(
+        [
+          ["id", (user) => String(user.id)],
+          ["name", (user) => user.name],
+          ["email", (user) => user.email ?? ""],
+        ],
+        { includeEndRowDelimiter: true },
+      ),
+    )
+    .pipeThrough(new TextEncoderStream()),
+  { headers: { "Content-Type": "text/csv" } },
+);
+```
+
+The columns are written in the order of the array, and the same header can be used more than once. Each function must return a string, so convert other values (e.g. numbers, or `null` to `""`) yourself. If a function throws, the stream is errored. The header row is written even if there are no objects. Pass `skipHeaders: true` to leave it out (e.g. when appending to an existing file). All of [`CsvEncoderStream`](#csvencoderstream)'s options can also be passed.
+
+It gives the same output as piping [`TableEncoderStream`](#tableencoderstream) into [`CsvEncoderStream`](#csvencoderstream), but is about 15% faster (see [benchmarks/results/encode-csv-objects.md](benchmarks/results/encode-csv-objects.md)).
 
 ### DebounceStream
 
@@ -444,6 +504,37 @@ const lines = response
 for await (const line of lines) {
   console.log(line);
 }
+```
+
+### TableDecoderStream
+
+Turn a stream of rows (arrays of strings), whose first row is a header row, into objects. It works in the same way as [`CsvObjectDecoderStream`](#csvobjectdecoderstream), with the same function and options (apart from the CSV options), but takes rows rather than text. This is useful for rows that come from somewhere other than CSV, or when you need to do something to the rows first. For CSV text, `CsvObjectDecoderStream` is faster.
+
+```ts
+import TableDecoderStream from "web-utility-streams/TableDecoderStream";
+
+const users = rows.pipeThrough(
+  new TableDecoderStream((row) => ({
+    id: Number(row.get("id")),
+    name: row.get("name"),
+  })),
+);
+```
+
+### TableEncoderStream
+
+Turn a stream of objects into rows (arrays of strings), with a header row first. It takes the same columns and `skipHeaders` option as [`CsvObjectEncoderStream`](#csvobjectencoderstream), but emits rows rather than CSV text. For CSV, `CsvObjectEncoderStream` is faster.
+
+```ts
+import TableEncoderStream from "web-utility-streams/TableEncoderStream";
+
+const rows = users.pipeThrough(
+  new TableEncoderStream<User>([
+    ["id", (user) => String(user.id)],
+    ["name", (user) => user.name],
+  ]),
+);
+// ["id", "name"], ["1", "Ada"], ["2", "Grace"], ...
 ```
 
 ### TimeoutStream

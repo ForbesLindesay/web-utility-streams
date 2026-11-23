@@ -46,8 +46,39 @@ const FIELD_START = 0;
 const UNQUOTED = 1;
 const QUOTED = 2;
 const AFTER_QUOTE = 3;
+/**
+ * Spaces (or tabs) at the start of a field, which are dropped if they are
+ * followed by a quote, or are part of the field if they aren't. The spaces
+ * from previous chunks are kept in `_field`.
+ */
+const LEADING_SPACE = 4;
+/**
+ * A quote in a quoted field (where quotes are escaped by doubling them) at the
+ * end of a chunk. It's an escaped quote if the next chunk starts with a quote,
+ * otherwise it's the closing quote.
+ */
+const QUOTE_PENDING = 5;
+/**
+ * An escape character in a quoted field (where quotes are escaped by a
+ * different character) at the end of a chunk. What it escapes depends on the
+ * start of the next chunk.
+ */
+const ESCAPE_PENDING = 6;
 type State =
-  typeof FIELD_START | typeof UNQUOTED | typeof QUOTED | typeof AFTER_QUOTE;
+  | typeof FIELD_START
+  | typeof UNQUOTED
+  | typeof QUOTED
+  | typeof AFTER_QUOTE
+  | typeof LEADING_SPACE
+  | typeof QUOTE_PENDING
+  | typeof ESCAPE_PENDING;
+
+// What `_parseQuoted*` return if they reach the end of the text without
+// finding the closing quote
+/** The rest of the text is part of the quoted field */
+const QUOTED_CONTINUES = -1;
+/** The text ends with a quote or escape character that depends on the next chunk */
+const QUOTED_PENDING = -2;
 
 function getChar(name: string, value: string): string {
   return getCsvChar("CsvDecoder", name, value);
@@ -170,7 +201,10 @@ export class CsvDecoder {
   private readonly _ignoreEmpty: boolean;
 
   // State that is kept between calls to `parse`
-  /** Text that hasn't been parsed yet, as it depends on the next chunk */
+  /**
+   * The text so far, while we are reading the first line to guess the
+   * delimiter. Once the delimiter is known, all text is parsed as it arrives.
+   */
   private _buffer = "";
   /** Set until we have guessed the delimiter, if it wasn't passed */
   private _detector: DelimiterDetector | undefined;
@@ -231,15 +265,17 @@ export class CsvDecoder {
    * `isFinal: true` with the last chunk (which can be empty) to emit the
    * final row, if the text doesn't end with a line break.
    *
+   * Once the delimiter is known, each chunk is parsed all the way to its end.
    * The decoder keeps track of the parts of an unfinished row that it has
-   * already parsed, so it only needs to keep a few characters of text (e.g.
-   * a quote, which could be the start of an escaped quote) until the next
-   * chunk.
+   * already parsed (including a quote or escape character at the end of a
+   * chunk, whose meaning depends on the next chunk), so it never needs to
+   * keep the text itself.
    */
   public parse(chunk: string, isFinal: boolean): void {
-    const buffer = this._buffer === "" ? chunk : this._buffer + chunk;
+    let text = chunk;
     if (this._detector) {
       // Wait until we've seen the whole first line (or all of the input)
+      const buffer = this._buffer + chunk;
       const foundLineEnd = this._detector.write(chunk);
       if (
         !foundLineEnd &&
@@ -252,38 +288,37 @@ export class CsvDecoder {
       this._delimiter = this._detector.result();
       this._delimiterCode = this._delimiter.charCodeAt(0);
       this._detector = undefined;
+      this._buffer = "";
+      text = buffer;
     }
-    this._buffer = "";
     let pos = 0;
-    if (buffer.length === 0) {
+    if (text.length === 0) {
       if (isFinal) this._finish();
       return;
     }
     if (this._atStart) {
       this._atStart = false;
-      if (buffer.charCodeAt(0) === BOM) pos = 1;
+      if (text.charCodeAt(0) === BOM) pos = 1;
     }
     if (this._skipLineFeed) {
       this._skipLineFeed = false;
-      if (buffer.charCodeAt(pos) === LF) pos++;
+      if (text.charCodeAt(pos) === LF) pos++;
     }
 
-    const end = buffer.length;
-    const parsedTo = this._parse(buffer, pos, end, isFinal);
+    const end = text.length;
+    this._parse(text, pos, end, isFinal);
     if (isFinal) {
       this._finish();
       return;
     }
     if (
-      parsedTo === end &&
       this._state === FIELD_START &&
       this._row.length === 0 &&
-      buffer.charCodeAt(end - 1) === CR
+      text.charCodeAt(end - 1) === CR
     ) {
       // The chunk ended with a "\r" that ended a row
       this._skipLineFeed = true;
     }
-    if (parsedTo !== buffer.length) this._buffer = buffer.slice(parsedTo);
   }
 
   /**
@@ -291,7 +326,9 @@ export class CsvDecoder {
    */
   private _finish(): void {
     const state = this._state;
-    if (state === QUOTED) {
+    if (state === QUOTED || state === ESCAPE_PENDING) {
+      if (state === ESCAPE_PENDING) this._field += this._escape;
+      this._state = QUOTED;
       throw this._error("missing closing quote");
     }
     if (state === FIELD_START && this._row.length === 0) return;
@@ -300,7 +337,7 @@ export class CsvDecoder {
     this._row = [];
     this._field = "";
     this._state = FIELD_START;
-    this._endRow(row, state === UNQUOTED);
+    this._endRow(row, state === UNQUOTED || state === LEADING_SPACE);
   }
 
   private _endRow(row: string[], lastFieldUnquoted: boolean): void {
@@ -336,16 +373,15 @@ export class CsvDecoder {
   }
 
   /**
-   * Parse `text` from `pos` to `end`. Returns the position up to which the
-   * text has been parsed. Any text after that must be passed again, followed
-   * by the next chunk.
+   * Parse `text` from `pos` to `end`, updating the parser's state so it can
+   * carry on from where it got to with the next chunk.
    */
   private _parse(
     text: string,
     pos: number,
     end: number,
     isFinal: boolean,
-  ): number {
+  ): void {
     const delimiter = this._delimiter;
     const delimiterCode = this._delimiterCode;
     const quoteCode = this._quoteCode;
@@ -363,6 +399,30 @@ export class CsvDecoder {
     let nextCR = -1;
 
     while (pos < end) {
+      // The previous chunk ended with a quote or escape character in a quoted
+      // field, whose meaning depends on the start of this chunk
+      if (state === QUOTE_PENDING) {
+        if (text.charCodeAt(pos) === quoteCode) {
+          // An escaped quote
+          field += this._quote;
+          pos++;
+          state = QUOTED;
+        } else {
+          // The closing quote
+          state = AFTER_QUOTE;
+        }
+      } else if (state === ESCAPE_PENDING) {
+        const code = text.charCodeAt(pos);
+        if (code === quoteCode || code === this._escapeCode) {
+          field += text[pos];
+          pos++;
+        } else {
+          // The escape character isn't escaping anything
+          field += this._escape;
+        }
+        state = QUOTED;
+      }
+
       if (state === FIELD_START) {
         const code = text.charCodeAt(pos);
         if (code === quoteCode) {
@@ -373,24 +433,34 @@ export class CsvDecoder {
           code !== delimiterCode &&
           quoteCode !== -1
         ) {
-          // Spaces before a quoted field are ignored
-          let p = pos + 1;
-          while (p < end) {
-            const c = text.charCodeAt(p);
-            if ((c !== SPACE && c !== TAB) || c === delimiterCode) break;
-            p++;
-          }
-          if (p === end && !isFinal) {
-            // We can't tell yet whether this is a quoted field
-            break;
-          }
-          if (p < end && text.charCodeAt(p) === quoteCode) {
-            pos = p + 1;
-            state = QUOTED;
-          } else {
-            state = UNQUOTED;
-          }
+          state = LEADING_SPACE;
         } else {
+          state = UNQUOTED;
+        }
+      }
+
+      if (state === LEADING_SPACE) {
+        // Spaces before a quoted field are ignored
+        let p = pos;
+        while (p < end) {
+          const c = text.charCodeAt(p);
+          if ((c !== SPACE && c !== TAB) || c === delimiterCode) break;
+          p++;
+        }
+        if (p === end && !isFinal) {
+          // We can't tell yet whether this is a quoted field, so keep the
+          // spaces in case it isn't
+          field += text.slice(pos, end);
+          pos = end;
+          break;
+        }
+        if (p < end && text.charCodeAt(p) === quoteCode) {
+          field = "";
+          pos = p + 1;
+          state = QUOTED;
+        } else {
+          // `field` has the spaces from previous chunks, and the rest are
+          // still in `text`
           state = UNQUOTED;
         }
       }
@@ -443,12 +513,16 @@ export class CsvDecoder {
             ? this._parseQuotedDoubled(text, pos, end, isFinal, field)
             : this._parseQuotedEscaped(text, pos, end, isFinal, field);
         field = this._quotedValue;
-        if (result < 0) {
+        if (result === QUOTED_CONTINUES) {
           // The field continues in the next chunk
-          this._state = state;
-          this._row = row;
-          this._field = field;
-          return -result - 1;
+          pos = end;
+          break;
+        }
+        if (result === QUOTED_PENDING) {
+          pos = end;
+          state =
+            this._escapeCode === quoteCode ? QUOTE_PENDING : ESCAPE_PENDING;
+          break;
         }
         pos = result;
         state = AFTER_QUOTE;
@@ -493,7 +567,6 @@ export class CsvDecoder {
     this._state = state;
     this._row = row;
     this._field = field;
-    return pos;
   }
 
   // The value of the quoted field, set by `_parseQuoted*`, so they can
@@ -503,8 +576,10 @@ export class CsvDecoder {
   /**
    * Parse a quoted field where quotes are escaped by doubling them, starting
    * after the opening quote (or where the previous chunk ended). Returns the
-   * position after the closing quote, or `-(parsedTo + 1)` if the field
-   * continues in the next chunk.
+   * position after the closing quote, `QUOTED_CONTINUES` if the field
+   * continues in the next chunk, or `QUOTED_PENDING` if the text ends with a
+   * quote that could be the closing quote or the start of an escaped quote.
+   * The value so far is set in `_quotedValue`.
    */
   private _parseQuotedDoubled(
     text: string,
@@ -524,7 +599,7 @@ export class CsvDecoder {
           this._state = QUOTED;
           throw this._error("missing closing quote");
         }
-        return -end - 1;
+        return QUOTED_CONTINUES;
       }
       if (q + 1 < end) {
         if (text.charCodeAt(q + 1) === quoteCode) {
@@ -536,7 +611,7 @@ export class CsvDecoder {
       } else if (!isFinal) {
         // We can't tell yet whether this is an escaped quote
         this._quotedValue = field + text.slice(pos, q);
-        return -q - 1;
+        return QUOTED_PENDING;
       }
       this._quotedValue =
         field === "" ? text.slice(pos, q) : field + text.slice(pos, q);
@@ -568,7 +643,7 @@ export class CsvDecoder {
         if (e + 1 === end && !isFinal) {
           // We can't tell yet what is being escaped
           this._quotedValue = field + text.slice(pos, e);
-          return -e - 1;
+          return QUOTED_PENDING;
         }
         const next = e + 1 < end ? text.charCodeAt(e + 1) : -1;
         if (next === quoteCode || next === escapeCode) {
@@ -588,7 +663,7 @@ export class CsvDecoder {
           this._state = QUOTED;
           throw this._error("missing closing quote");
         }
-        return -end - 1;
+        return QUOTED_CONTINUES;
       }
       this._quotedValue = field + text.slice(pos, q);
       return q + 1;

@@ -4,7 +4,7 @@ import TableEncoder, {
   type TableEncoderOptions,
 } from "./internal/TableEncoder.js";
 
-export type CsvColumn<TObject> = TableColumn<TObject>;
+export type { TableColumn } from "./internal/TableEncoder.js";
 
 export interface CsvObjectEncoderStreamOptions
   extends CsvEncoderOptions, TableEncoderOptions {}
@@ -14,7 +14,7 @@ export default class CsvObjectEncoderStream<TObject> extends TransformStream<
   string
 > {
   constructor(
-    columns: readonly CsvColumn<TObject>[],
+    columns: readonly TableColumn<TObject>[],
     options: CsvObjectEncoderStreamOptions = {},
   ) {
     const tableEncoder = new TableEncoder(columns, options);

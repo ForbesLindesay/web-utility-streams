@@ -171,8 +171,24 @@ export function expectedIdSum(count: number): number {
   return (count * (count - 1)) / 2;
 }
 
-export function dataFile(format: DataFormat, sizeName: string): string {
-  return path.join(DATA_DIR, `${sizeName}.${format}`);
+export interface DataFileOptions {
+  /**
+   * Whether a CSV file starts with a header row (with the names in
+   * `RECORD_ROW_HEADERS`). It's a separate file, so decode-csv can keep
+   * reading a file without one.
+   */
+  headers?: boolean;
+}
+
+export function dataFile(
+  format: DataFormat,
+  sizeName: string,
+  { headers = false }: DataFileOptions = {},
+): string {
+  return path.join(
+    DATA_DIR,
+    headers ? `${sizeName}.headers.${format}` : `${sizeName}.${format}`,
+  );
 }
 
 /**
@@ -186,6 +202,7 @@ export async function writeDataFile(
   file: string,
   format: DataFormat,
   count: number,
+  { headers = false }: DataFileOptions = {},
 ): Promise<void> {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const partial = `${file}.partial`;
@@ -195,6 +212,10 @@ export async function writeDataFile(
   };
   if (format === "json") {
     await write(`{"total":${count},"page":1,"results":[\n`);
+  }
+  if (headers) {
+    if (format !== "csv") throw new Error("Only CSV files can have headers");
+    await write(`${csvRowText(RECORD_ROW_HEADERS)}\n`);
   }
   let buffer = "";
   for (let i = 0; i < count; i++) {
