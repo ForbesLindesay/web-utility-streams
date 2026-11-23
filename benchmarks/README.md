@@ -37,7 +37,7 @@ The benchmarks are written in TypeScript, and run directly by Node.js, which str
 
 ## What's measured
 
-There are 26 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
+There are 28 suites, one for each file in [suites/](suites/). These ones read a data file, or generate realistic records:
 
 - **decode-json:** decode the elements of the `results` array in a file shaped like a paginated API response: `{"total":N,"page":1,"results":[...],"next":null}`, with one record per line.
 - **decode-ndjson:** decode a file with one JSON record per line.
@@ -46,6 +46,8 @@ There are 26 suites, one for each file in [suites/](suites/). These ones read a 
 - **split-lines:** split the newline delimited JSON file into lines, without parsing them.
 - **decode-sse:** decode a [`text/event-stream`](https://html.spec.whatwg.org/multipage/server-sent-events.html) (server-sent events) file, with one event per record.
 - **encode-sse:** encode generated events in the `text/event-stream` format.
+- **decode-csv:** decode a CSV file with one row of 12 fields per record (and no header row). One field contains quotes and a line break, so it has to be quoted.
+- **encode-csv:** encode generated records as CSV rows. Converting each record to an array of strings is included in every case.
 - **decode-json-tokens:** split the JSON file used by decode-json into tokens.
 - **consume-text**, **consume-bytes** and **consume-json:** read a whole file stream into a string, a `Uint8Array`, or a parsed JSON value. `consume-text` and `consume-json` only run for inputs up to 512MB, as the text has to fit in a single string.
 
@@ -65,7 +67,7 @@ The rest measure the overhead each general purpose stream adds per chunk. Their 
 - **empty:** creating and reading one `EmptyStream` per chunk.
 - **to-generator:** iterating over a stream with `readableStreamToGenerator`, compared with the built-in async iterator.
 
-The records look like typical API data (numbers, booleans, `null`, nested objects and arrays, ISO dates, strings that need escaping and non-ASCII text), and are about 300 bytes each. Each server-sent event has an `id`, an `event` type, and a record's JSON as its `data`. Every 10th event's data is pretty-printed, so it's split over multiple `data` lines, and there's an occasional comment and `retry` field, as a real server might send. Everything is generated deterministically by [data.ts](data.ts).
+The records look like typical API data (numbers, booleans, `null`, nested objects and arrays, ISO dates, strings that need escaping and non-ASCII text), and are about 300 bytes each. Each server-sent event has an `id`, an `event` type, and a record's JSON as its `data`. Every 10th event's data is pretty-printed, so it's split over multiple `data` lines, and there's an occasional comment and `retry` field, as a real server might send. Each CSV row has the record's fields in order (with its `address` flattened into three fields, and its `tags` joined with `;`), and is about 175 bytes. Each size has the same number of records in every format, so a CSV file is smaller than its size's name suggests (e.g. the "256MB" CSV file is 151MB). Everything is generated deterministically by [data.ts](data.ts).
 
 ### Reading the input
 
@@ -85,10 +87,14 @@ Each decoder reads the input file the way it would in a real program. Libraries 
 | [eventsource-parser](https://www.npmjs.com/package/eventsource-parser)                       | 118M                        | decode-sse                                     |
 | [@microsoft/fetch-event-source](https://www.npmjs.com/package/@microsoft/fetch-event-source) | 5.7M                        | decode-sse                                     |
 | [eventsource-encoder](https://www.npmjs.com/package/eventsource-encoder)                     | 128K                        | encode-sse                                     |
+| [fast-csv](https://www.npmjs.com/package/fast-csv)                                           | 32M                         | decode-csv, encode-csv                         |
+| [csv-parse](https://www.npmjs.com/package/csv-parse)                                         | 30M                         | decode-csv                                     |
+| [papaparse](https://www.npmjs.com/package/papaparse)                                         | 27M                         | decode-csv                                     |
+| [csv-stringify](https://www.npmjs.com/package/csv-stringify)                                 | 14M                         | encode-csv                                     |
 | `node:stream/consumers`                                                                      | built in                    | consume-text, consume-bytes, consume-json      |
 | `node:stream`                                                                                | built in                    | map, filter, filter-map (`Readable.map` etc.)  |
 
-Each library is used the way its documentation recommends. `stream-json`'s stages are combined into a single stream with [stream-chain](https://www.npmjs.com/package/stream-chain), as its documentation shows, which is much faster than piping them as separate streams. `stream-json` is measured with both Node.js streams and web streams. `@streamparser/json` is measured with web streams (using `@streamparser/json-whatwg`). `bfj` isn't included in the encoder benchmarks, because `bfj.streamify` can only encode data that's already in memory, not a stream of values. `@microsoft/fetch-event-source` doesn't export its parser, so we import its `getLines` and `getMessages` functions from its CommonJS build. They decode bytes directly, using callbacks rather than a stream. `eventsource-encoder` only provides an `encode` function, so it's run in a `TransformStream`.
+Each library is used the way its documentation recommends. `stream-json`'s stages are combined into a single stream with [stream-chain](https://www.npmjs.com/package/stream-chain), as its documentation shows, which is much faster than piping them as separate streams. `stream-json` is measured with both Node.js streams and web streams. `@streamparser/json` is measured with web streams (using `@streamparser/json-whatwg`). `bfj` isn't included in the encoder benchmarks, because `bfj.streamify` can only encode data that's already in memory, not a stream of values. `@microsoft/fetch-event-source` doesn't export its parser, so we import its `getLines` and `getMessages` functions from its CommonJS build. They decode bytes directly, using callbacks rather than a stream. `eventsource-encoder` only provides an `encode` function, so it's run in a `TransformStream`. `csv-parse` is measured with both Node.js streams and web streams (`csv-parse/stream`). `papaparse` is run with `Papa.NODE_STREAM_INPUT`, which its documentation recommends for Node.js streams, and `skipEmptyLines`, as otherwise it emits an extra row for the final line break. The encode-csv output is checked by parsing it with `csv-parse`, rather than this library's decoder.
 
 Most of the general purpose streams don't have a library equivalent, so they're compared with the most obvious way of doing the same thing with built-in APIs, labelled "native". For example, a `TransformStream` with a `transform` function for the map and filter suites, `ReadableStream.from` with an async generator for concat, deferred and lazy, and `new Response(stream).text()` for consume-text.
 

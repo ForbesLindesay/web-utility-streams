@@ -7,6 +7,8 @@ Various utility streams that are very useful for working with web streams.
 **Transform streams**
 
 - [`AddPrefixStream`](#addprefixstream) - Emit some chunks before the rest of the stream.
+- [`CsvDecoderStream`](#csvdecoderstream) - Decode CSV text into rows.
+- [`CsvEncoderStream`](#csvencoderstream) - Encode rows as CSV text.
 - [`DebounceStream`](#debouncestream) - Emit at most one chunk per period, dropping the rest.
 - [`DebugStream`](#debugstream) - Call a function with each chunk as it passes through.
 - [`EventSourceDecoderStream`](#eventsourcedecoderstream) - Decode `text/event-stream` (Server-Sent Events) text into events.
@@ -70,6 +72,96 @@ const events = updates.pipeThrough(
 ```
 
 The prefix is only read as the output is read, and written chunks wait until it's done. If the prefix errors, the stream errors. If the stream is cancelled or errors first, the prefix is closed, so a generator's `finally` blocks run and a `ReadableStream` is cancelled.
+
+### CsvDecoderStream
+
+Decode a stream of CSV text into rows, where each row is an array of strings. The text can be split into chunks at any point, and each row is emitted as soon as it is complete.
+
+```ts
+import CsvDecoderStream from "web-utility-streams/CsvDecoderStream";
+
+const response = await fetch("https://example.com/users.csv");
+const rows = response
+  .body!.pipeThrough(new TextDecoderStream())
+  .pipeThrough(new CsvDecoderStream());
+
+for await (const [id, name, email] of rows) {
+  console.log(id, name, email);
+}
+```
+
+Fields can be quoted, so they can contain delimiters, quotes and line breaks. A quote within a quoted field is escaped by doubling it (`""`). Spaces and tabs around a quoted field are ignored, but spaces in unquoted fields are kept. Rows can end with `"\r\n"`, `"\n"` or `"\r"`, a final line break doesn't produce an extra row, and a byte order mark at the start of the text is removed. Invalid CSV (text after a closing quote, or a quoted field with no closing quote) errors the stream with a `SyntaxError`. These options can be passed to the constructor:
+
+| Option                     | Description                                                                                                                                                                   | Default                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `delimiter`                | The character that separates fields, e.g. `","`, `";"` or `"\t"`.                                                                                                             | Guessed from the first line (see below) |
+| `maxCharsToGuessDelimiter` | If `delimiter` isn't passed, the most characters to read before guessing it, if the first line is longer than this (see below).                                               | `10000`                                 |
+| `quote`                    | The character used to quote fields, or `false` to treat quotes like any other character.                                                                                      | `'"'`                                   |
+| `escape`                   | The character that escapes a quote in a quoted field. If it isn't the quote character (e.g. `"\\"`), it also escapes itself, and is kept as it is before any other character. | The quote character                     |
+| `ignoreEmpty`              | Skip blank lines (lines that are empty or only contain spaces and tabs), rather than emitting them as a row with one field.                                                   | `false`                                 |
+
+If you don't pass a `delimiter`, it's guessed from the first line of the text: whichever of `","`, `";"` and `"\t"` appears most often, not counting any in quoted fields. If there's a tie, or none of them appear, `","` is preferred, then `";"`. No rows are emitted until the end of the first line has been read, or `maxCharsToGuessDelimiter` characters (10,000 by default), if that comes first. That limit is checked after each chunk, so all of the chunk that reaches it is used to guess. If you know which delimiter your data uses, it's best to pass it, as a file with a single column could contain one of these characters in its first line. You must pass a `delimiter` if `quote` or `escape` is one of these characters.
+
+The rows are arrays, so if your CSV has a header row, you can use the first row to turn the rest into objects:
+
+```ts
+let headers: string[] | undefined;
+const users = rows.pipeThrough(
+  new FilterMapStream((row) => {
+    if (!headers) {
+      headers = row;
+      return undefined;
+    }
+    return Object.fromEntries(headers.map((header, i) => [header, row[i]]));
+  }),
+);
+```
+
+The parser is also exported as `CsvDecoder`, if you want to parse CSV text without using streams. Pass a function to call with each row (and any options) to its constructor, then call `parse(chunk, isFinal)` for each chunk of text, with `isFinal: true` for the last one (which can be empty):
+
+```ts
+import { CsvDecoder } from "web-utility-streams/CsvDecoderStream";
+
+const rows: string[][] = [];
+const decoder = new CsvDecoder((row) => rows.push(row));
+decoder.parse('id,name\n1,"Smith, Jane"\n2,', false);
+decoder.parse("John Doe", true);
+// rows: [["id", "name"], ["1", "Smith, Jane"], ["2", "John Doe"]]
+```
+
+Its results match [fast-csv](https://www.npmjs.com/package/fast-csv)'s for the same options (fast-csv always uses `","` by default, rather than guessing), except that blank lines are emitted as `[""]` rather than `[]`, and fields that only contain spaces are always kept as they are. In our benchmarks, it's about twice as fast as papaparse, 5 times as fast as csv-parse, and 7-10 times as fast as fast-csv (see [benchmarks/results/decode-csv.md](benchmarks/results/decode-csv.md)).
+
+### CsvEncoderStream
+
+Encode a stream of rows (arrays of strings) as CSV text. By default, fields are quoted if they contain the delimiter, a quote or a line break, and quotes within them are escaped. Unless `quoteMode` is `"NEVER"`, a row with a single field that is empty (or only contains spaces and tabs) is always quoted, so it isn't written as a blank line. An empty row (`[]`) is written as a blank line. Otherwise, the output is the same as [fast-csv](https://www.npmjs.com/package/fast-csv)'s `format` for the same options. It can be decoded by `CsvDecoderStream`. `delimiter`, `quote` and `escape` must each be a single character that isn't a line break, and `delimiter` and `quote` must be different (unless `quoteMode` is `"NEVER"`). It's about 1.5 times as fast as fast-csv, and twice as fast as csv-stringify (see [benchmarks/results/encode-csv.md](benchmarks/results/encode-csv.md)).
+
+```ts
+import CsvEncoderStream from "web-utility-streams/CsvEncoderStream";
+
+return new Response(
+  users
+    .pipeThrough(
+      new MapStream((user) => [String(user.id), user.name, user.email]),
+    )
+    .pipeThrough(new CsvEncoderStream({ includeEndRowDelimiter: true }))
+    .pipeThrough(new TextEncoderStream()),
+  { headers: { "Content-Type": "text/csv" } },
+);
+```
+
+Every field must be a string, so convert other values (e.g. numbers, or `null` to `""`) before encoding them. Null characters (`"\0"`) are removed. These options can be passed to the constructor:
+
+| Option                   | Description                                                                                                                                                      | Default             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `delimiter`              | The text between fields.                                                                                                                                         | `","`               |
+| `rowDelimiter`           | The text between rows.                                                                                                                                           | `"\n"`              |
+| `includeEndRowDelimiter` | Also write `rowDelimiter` after the last row. Without this, each row's chunk starts with `rowDelimiter` (except the first), rather than ending with it.          | `false`             |
+| `quote`                  | The character used to quote fields.                                                                                                                              | `'"'`               |
+| `escape`                 | The character used to escape quotes in quoted fields. If it isn't the quote character, it is also used to escape itself.                                         | The quote character |
+| `quoteMode`              | `"AUTO"` quotes fields that need it (those containing the delimiter, a quote or a line break), `"ALWAYS"` quotes every field, and `"NEVER"` never quotes fields. | `"AUTO"`            |
+| `writeBOM`               | Write a byte order mark at the start of the output, which helps some programs (e.g. Excel) detect that the text is UTF-8.                                        | `false`             |
+
+The encoder is also exported as `CsvEncoder`, whose `formatRow(row, isFirst)` method returns the text for one row. Pass `isFirst: true` for the first row, so the byte order mark (if `writeBOM` is set) is written before it, and the row delimiter isn't written before it.
 
 ### DebounceStream
 

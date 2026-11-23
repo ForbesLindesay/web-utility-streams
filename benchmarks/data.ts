@@ -12,10 +12,10 @@ const CITIES = ["London", "Paris", "Zürich", "São Paulo", "東京", "New York"
 const TAGS = ["alpha", "beta", "gamma", "delta"];
 
 /**
- * The format of a data file: a JSON document, newline delimited JSON, or
- * server-sent events (`text/event-stream`).
+ * The format of a data file: a JSON document, newline delimited JSON,
+ * server-sent events (`text/event-stream`), or CSV.
  */
-export type DataFormat = "json" | "ndjson" | "sse";
+export type DataFormat = "json" | "ndjson" | "sse" | "csv";
 
 export interface DataRecord {
   id: number;
@@ -94,6 +94,43 @@ function eventText(i: number): string {
   return text + "\n";
 }
 
+/**
+ * A record as a CSV row. The id is the first field. The bio field contains
+ * quotes and a line break, so it has to be quoted.
+ */
+export function recordRow(value: DataRecord): string[] {
+  return [
+    String(value.id),
+    value.name,
+    value.email,
+    String(value.active),
+    String(value.score),
+    value.tags.join(";"),
+    value.address.street,
+    value.address.city,
+    value.address.zip,
+    value.bio,
+    value.manager === null ? "" : String(value.manager),
+    value.createdAt,
+  ];
+}
+
+export function* recordRows(count: number): Generator<string[]> {
+  for (let i = 0; i < count; i++) yield recordRow(record(i));
+}
+
+/**
+ * The text of a CSV row, quoting fields that need it. This is written
+ * independently of the library's encoder, so it can be used to check it.
+ */
+function csvRowText(row: string[]): string {
+  return row
+    .map((field) =>
+      /[",\r\n]/.test(field) ? `"${field.replaceAll('"', '""')}"` : field,
+    )
+    .join(",");
+}
+
 const AVERAGE_RECORD_BYTES = (() => {
   let total = 0;
   for (let i = 0; i < 10000; i++) {
@@ -123,8 +160,9 @@ export function dataFile(format: DataFormat, sizeName: string): string {
 /**
  * Write a JSON file in the shape of a typical paginated API response:
  * `{"total":N,"page":1,"results":[...],"next":null}`, with one record per line.
- * Or, for "ndjson", one record per line, or for "sse", one event per record
- * in the `text/event-stream` format.
+ * Or, for "ndjson", one record per line, for "sse", one event per record
+ * in the `text/event-stream` format, or for "csv", one row per record (with
+ * no header row).
  */
 export async function writeDataFile(
   file: string,
@@ -144,6 +182,8 @@ export async function writeDataFile(
   for (let i = 0; i < count; i++) {
     if (format === "sse") {
       buffer += eventText(i);
+    } else if (format === "csv") {
+      buffer += `${csvRowText(recordRow(record(i)))}\n`;
     } else {
       const json = JSON.stringify(record(i));
       buffer +=
