@@ -48,6 +48,7 @@ export class CsvEncoder {
   private readonly _specialRegexp: RegExp;
   private readonly _escapeRegexp: RegExp;
   private readonly _escapeReplacement: string;
+  private _isFirstRow = true;
 
   public constructor(opts?: CsvEncoderOptions) {
     this._delimiter = getCsvChar(
@@ -121,7 +122,9 @@ export class CsvEncoder {
     return value;
   }
 
-  public formatRow(columns: readonly string[], isFirst: boolean): string {
+  public formatRow(columns: readonly string[]): string {
+    const isFirst = this._isFirstRow;
+    this._isFirstRow = false;
     let formattedCols = isFirst
       ? this._writeBOM
         ? BOM
@@ -176,11 +179,9 @@ export default class CsvEncoderStream extends TransformStream<
 > {
   constructor(options?: CsvEncoderOptions) {
     const encoder = new CsvEncoder(options);
-    let isFirst = true;
     super({
       transform(chunk, controller) {
-        controller.enqueue(encoder.formatRow(chunk, isFirst));
-        isFirst = false;
+        controller.enqueue(encoder.formatRow(chunk));
       },
     });
   }

@@ -115,6 +115,24 @@ export function recordRow(value: DataRecord): string[] {
   ];
 }
 
+/**
+ * Names for the fields of `recordRow`, for the suites that need a header row
+ */
+export const RECORD_ROW_HEADERS = [
+  "id",
+  "name",
+  "email",
+  "active",
+  "score",
+  "tags",
+  "street",
+  "city",
+  "zip",
+  "bio",
+  "manager",
+  "createdAt",
+];
+
 export function* recordRows(count: number): Generator<string[]> {
   for (let i = 0; i < count; i++) yield recordRow(record(i));
 }

@@ -24,6 +24,14 @@
       "types": "./lib/CsvEncoderStream.d.mts",
       "default": "./lib/CsvEncoderStream.mjs"
     },
+    "./CsvObjectDecoderStream": {
+      "types": "./lib/CsvObjectDecoderStream.d.mts",
+      "default": "./lib/CsvObjectDecoderStream.mjs"
+    },
+    "./CsvObjectEncoderStream": {
+      "types": "./lib/CsvObjectEncoderStream.d.mts",
+      "default": "./lib/CsvObjectEncoderStream.mjs"
+    },
     "./DebounceStream": {
       "types": "./lib/DebounceStream.d.mts",
       "default": "./lib/DebounceStream.mjs"
@@ -91,6 +99,14 @@
     "./SplitLinesStream": {
       "types": "./lib/SplitLinesStream.d.mts",
       "default": "./lib/SplitLinesStream.mjs"
+    },
+    "./TableDecoderStream": {
+      "types": "./lib/TableDecoderStream.d.mts",
+      "default": "./lib/TableDecoderStream.mjs"
+    },
+    "./TableEncoderStream": {
+      "types": "./lib/TableEncoderStream.d.mts",
+      "default": "./lib/TableEncoderStream.mjs"
     },
     "./TimeoutStream": {
       "types": "./lib/TimeoutStream.d.mts",
